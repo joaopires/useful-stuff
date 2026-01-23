@@ -1,0 +1,4 @@
+Issue Type,Summary,Description,Priority,Story Points,Labels
+Story,Implement login page,User should be able to login with email and password,High,5,frontend auth
+Bug,Fix header alignment,Header is shifted to the left on mobile,Medium,2,ui mobile
+Task,Setup CI/CD pipeline,Configure Github Actions for the repository,Lowest,8,devops infrastructure
