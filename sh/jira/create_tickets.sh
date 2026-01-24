@@ -9,17 +9,40 @@
 #
 # Flags:
 #   -d : Dry-run mode (prints JSON payload without creating tickets)
+#   -h : Show this help message
 #
 # CSV Columns expected:
 #   Issue Type, Summary, Description, Priority, Story Points, Labels
 # ==============================================================================
 
+# Function to show help
+show_help() {
+    echo "Jira Ticket Creator Script (v3 REST API)"
+    echo ""
+    echo "Usage:"
+    echo "  export JIRA_AUTH=\"your-email@example.com:your-api-token\""
+    echo "  $0 [-d] [-h] <csv_filepath> <jira_organization> <project_key>"
+    echo ""
+    echo "Flags:"
+    echo "  -d : Dry-run mode (prints JSON payload without creating tickets)"
+    echo "  -h : Show this help message"
+    echo ""
+    echo "Arguments:"
+    echo "  <csv_filepath>      Path to the CSV file containing ticket data"
+    echo "  <jira_organization> Your Jira domain (e.g., 'company' or 'company.atlassian.net')"
+    echo "  <project_key>       The Jira project key (e.g., 'PROJ')"
+    echo ""
+    echo "CSV Columns expected:"
+    echo "  Issue Type, Summary, Description, Priority, Story Points, Labels"
+}
+
 # Parse flags
 DRY_RUN=false
-while getopts "d" opt; do
+while getopts "dh" opt; do
     case ${opt} in
         d) DRY_RUN=true ;;
-        *) echo "Usage: $0 [-d] <csv_filepath> <jira_organization> <project_key>"; exit 1 ;;
+        h) show_help; exit 0 ;;
+        *) show_help; exit 1 ;;
     esac
 done
 shift $((OPTIND-1))
@@ -31,8 +54,7 @@ PROJECT_KEY="$3"
 # Check arguments
 if [ -z "$CSV_FILE" ] || [ -z "$DOMAIN" ] || [ -z "$PROJECT_KEY" ]; then
     echo "❌ Error: Missing arguments."
-    echo "Usage: $0 [-d] <csv_filepath> <jira_organization> <project_key>"
-    echo "Example: $0 -d tasks.csv my-domain PROJ"
+    show_help
     exit 1
 fi
 
