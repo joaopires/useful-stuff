@@ -107,17 +107,73 @@ fi
 echo "🚀 Starting ticket creation for project: $PROJECT_KEY"
 
 # Parse CSV to JSON using Python for robust handling of quotes and commas
-RECORDS_JSON=$(python3 -c '
+# Also converts Description to Atlassian Document Format (ADF)
+RECORDS_JSON=$(python3 -c "
 import csv, json, sys
+
+def to_adf_content(text):
+    if not text:
+        return []
+    
+    content = []
+    lines = text.splitlines()
+    current_list = None
+    
+    for line in lines:
+        clean_line = line.strip()
+        if not clean_line:
+            current_list = None
+            continue
+            
+        if clean_line.startswith('- '):
+            if current_list is None:
+                current_list = {'type': 'bulletList', 'content': []}
+                content.append(current_list)
+            
+            item_text = clean_line[2:].strip()
+            current_list['content'].append({
+                'type': 'listItem',
+                'content': [{
+                    'type': 'paragraph',
+                    'content': [{'type': 'text', 'text': item_text}]
+                }]
+            })
+        else:
+            current_list = None
+            paragraph_content = []
+            
+            if 'DoD:' in clean_line:
+                parts = clean_line.split('DoD:', 1)
+                if parts[0]:
+                    paragraph_content.append({'type': 'text', 'text': parts[0]})
+                
+                paragraph_content.append({'type': 'text', 'text': 'DoD:', 'marks': [{'type': 'strong'}]})
+                
+                if parts[1]:
+                    paragraph_content.append({'type': 'text', 'text': parts[1]})
+            else:
+                paragraph_content.append({'type': 'text', 'text': clean_line})
+                
+            content.append({
+                'type': 'paragraph',
+                'content': paragraph_content
+            })
+            
+    return content
+
 try:
-    with open(sys.argv[1], mode="r", encoding="utf-8-sig") as f:
+    with open(sys.argv[1], mode='r', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
-        data = [row for row in reader]
+        data = []
+        for row in reader:
+            desc = row.get('Description', '')
+            row['DescriptionADF'] = {'type': 'doc', 'version': 1, 'content': to_adf_content(desc)}
+            data.append(row)
         print(json.dumps(data))
 except Exception as e:
-    print(f"Error parsing CSV: {e}", file=sys.stderr)
+    print(f'Error parsing CSV: {e}', file=sys.stderr)
     sys.exit(1)
-' "$CSV_FILE")
+" "$CSV_FILE")
 
 if [ $? -ne 0 ]; then
     echo "❌ Error: Failed to parse CSV."
@@ -129,7 +185,7 @@ echo "$RECORDS_JSON" | jq -c '.[]' | while read -r record; do
     # Extract fields from the JSON record
     ISSUE_TYPE=$(echo "$record" | jq -r '."Issue Type" // empty')
     SUMMARY=$(echo "$record" | jq -r '.Summary // empty')
-    DESCRIPTION=$(echo "$record" | jq -r '.Description // empty')
+    DESCRIPTION_ADF=$(echo "$record" | jq -c '.DescriptionADF')
     PRIORITY=$(echo "$record" | jq -r '.Priority // empty')
     STORY_POINTS=$(echo "$record" | jq -r '."Story Points" // empty')
     LABELS_RAW=$(echo "$record" | jq -r '.Labels // empty')
@@ -146,24 +202,6 @@ echo "$RECORDS_JSON" | jq -c '.[]' | while read -r record; do
         if . == "" then [] 
         else split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))
         end')
-
-    # Construct the Atlassian Document Format (ADF) description
-    # This is required for Jira Cloud REST API v3
-    DESCRIPTION_ADF=$(jq -n --arg desc "$DESCRIPTION" '{
-        type: "doc",
-        version: 1,
-        content: [
-            {
-                type: "paragraph",
-                content: [
-                    {
-                        text: $desc,
-                        type: "text"
-                    }
-                ]
-            }
-        ]
-    }')
 
     # Construct the full payload
     # Note: Issues are created with the provided names for issue type and priority.
