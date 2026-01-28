@@ -95,7 +95,7 @@ fi
 echo "🔍 Attempting to find Story Points custom field ID..."
 STORY_POINTS_ID=$(curl -s -u "$JIRA_AUTH" \
     "https://$DOMAIN/rest/api/3/field" | \
-    jq -r '.[] | select(.name == "Story Points") | .id' | head -n 1)
+    jq -r '.[] | select(.name == "Story point estimate") | .id' | head -n 1)
 
 if [ -z "$STORY_POINTS_ID" ]; then
     echo "⚠️  Warning: Could not find 'Story Points' field ID automatically. Story points will be skipped."
@@ -115,6 +115,13 @@ def to_adf_content(text):
     if not text:
         return []
     
+    import re
+    # Pre-process text to normalize common patterns into lines
+    # 1. Ensure DoD: starts on a new line if it's not already
+    text = re.sub(r'([^ \n])\s*(DoD:|Acceptance Criteria:)', r'\1\n\2', text)
+    # 2. Ensure - bullet points start on new lines
+    text = re.sub(r'([^- \n])\s*- ', r'\1\n- ', text)
+    
     content = []
     lines = text.splitlines()
     current_list = None
@@ -125,12 +132,12 @@ def to_adf_content(text):
             current_list = None
             continue
             
-        if clean_line.startswith('- '):
+        if clean_line.startswith('-'):
             if current_list is None:
                 current_list = {'type': 'bulletList', 'content': []}
                 content.append(current_list)
             
-            item_text = clean_line[2:].strip()
+            item_text = clean_line.lstrip('-').strip()
             current_list['content'].append({
                 'type': 'listItem',
                 'content': [{
@@ -140,24 +147,33 @@ def to_adf_content(text):
             })
         else:
             current_list = None
-            paragraph_content = []
             
-            if 'DoD:' in clean_line:
-                parts = clean_line.split('DoD:', 1)
-                if parts[0]:
-                    paragraph_content.append({'type': 'text', 'text': parts[0]})
+            # Pattern to match boldable headings
+            header_match = re.search(r'(DoD:|Acceptance Criteria:)', clean_line)
+            
+            if header_match:
+                header_text = header_match.group(1)
+                parts = clean_line.split(header_text, 1)
                 
-                paragraph_content.append({'type': 'text', 'text': 'DoD:', 'marks': [{'type': 'strong'}]})
+                if parts[0].strip():
+                    content.append({
+                        'type': 'paragraph',
+                        'content': [{'type': 'text', 'text': parts[0].strip()}]
+                    })
                 
-                if parts[1]:
-                    paragraph_content.append({'type': 'text', 'text': parts[1]})
+                header_content = [{'type': 'text', 'text': header_text, 'marks': [{'type': 'strong'}]}]
+                if parts[1].strip():
+                    header_content.append({'type': 'text', 'text': ' ' + parts[1].strip()})
+                    
+                content.append({
+                    'type': 'paragraph',
+                    'content': header_content
+                })
             else:
-                paragraph_content.append({'type': 'text', 'text': clean_line})
-                
-            content.append({
-                'type': 'paragraph',
-                'content': paragraph_content
-            })
+                content.append({
+                    'type': 'paragraph',
+                    'content': [{'type': 'text', 'text': clean_line}]
+                })
             
     return content
 
