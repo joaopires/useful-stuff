@@ -12,7 +12,7 @@
 #   -h : Show this help message
 #
 # CSV Columns expected:
-#   Issue Type, Summary, Description, Priority, Story Points, Labels
+#   Issue Type, Summary, Description, Priority, Story Points, Labels, Parent
 # ==============================================================================
 
 # Function to show help
@@ -33,7 +33,7 @@ show_help() {
     echo "  <project_key>       The Jira project key (e.g., 'PROJ')"
     echo ""
     echo "CSV Columns expected:"
-    echo "  Issue Type, Summary, Description, Priority, Story Points, Labels"
+    echo "  Issue Type, Summary, Description, Priority, Story Points, Labels, Parent"
 }
 
 # Parse flags
@@ -189,6 +189,7 @@ echo "$RECORDS_JSON" | jq -c '.[]' | while read -r record; do
     PRIORITY=$(echo "$record" | jq -r '.Priority // empty')
     STORY_POINTS=$(echo "$record" | jq -r '."Story Points" // empty')
     LABELS_RAW=$(echo "$record" | jq -r '.Labels // empty')
+    PARENT_KEY=$(echo "$record" | jq -r '.Parent // empty')
 
     if [ -z "$SUMMARY" ]; then
         echo "⏭️  Skipping row with missing Summary."
@@ -213,6 +214,7 @@ echo "$RECORDS_JSON" | jq -c '.[]' | while read -r record; do
         --arg priority "$PRIORITY" \
         --arg sp "$STORY_POINTS" \
         --arg sp_id "$STORY_POINTS_ID" \
+        --arg parent "$PARENT_KEY" \
         --argjson description "$DESCRIPTION_ADF" \
         --argjson labels "$LABELS_JSON" \
         '{
@@ -227,6 +229,9 @@ echo "$RECORDS_JSON" | jq -c '.[]' | while read -r record; do
         } | 
         if $sp_id != "" and $sp != "" then 
             .fields[$sp_id] = ($sp | tonumber) 
+        else . end |
+        if $parent != "" then
+            .fields.parent = { key: $parent }
         else . end')
 
     # Send the POST request to Jira (skip if dry-run)
