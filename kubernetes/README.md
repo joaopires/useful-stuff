@@ -85,6 +85,8 @@ make deploy-apps FOLDER=path/to/my-apps
 **File Format:**
 Each YAML file in the folder represents the values for the `charts/argocd` chart. The filename (e.g., `my-app.yaml`) determines the ArgoCD Application name (`my-app`).
 
+For a complete reference of available configuration options, see [`charts/argocd/values.yaml`](charts/argocd/values.yaml).
+
 Example `my-apps/app1.yaml`:
 
 ```yaml
