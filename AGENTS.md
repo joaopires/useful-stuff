@@ -38,6 +38,7 @@ The `kubernetes/` directory contains a self-contained local platform.
 3. **Idempotency**: Scripts should ideally be idempotent. If modifying them, ensure they handle re-runs gracefully.
 4. **Dependencies**: Be aware that scripts might depend on external tools (e.g., `kind`, `helm`, `kubectl`, `jq`).
 5. **Documentation**: Whenever you modify code, scripts, or workflows, you MUST update the corresponding `README.md` to reflect the changes (e.g., new flags, changed behavior, usage instructions).
+6. **Self-Maintenance**: If your changes alter the repository structure, workflows, or add new tools/scripts, you MUST update this `AGENTS.md` file to keep it accurate and useful for future agents.
 
 ## 📝 Commit Standards
 
