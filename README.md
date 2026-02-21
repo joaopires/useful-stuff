@@ -27,7 +27,7 @@ Custom plugins for Zsh. See [oh-my-zsh/README.md](oh-my-zsh/README.md) for detai
 
 ### ☸️ Kubernetes (`/kubernetes`)
 
-A complete local GitOps environment using Kind, ArgoCD, and Gitea.
+A complete local GitOps environment using Kind, ArgoCD, and Gitea. See [kubernetes/README.md](kubernetes/README.md) for detailed documentation.
 
 - **Features**:
   - Automated Kind cluster creation with port mappings (80/443).
