@@ -56,3 +56,20 @@ Agents must follow **Conventional Commits** for all commit messages.
   * `chore`: Changes to the build process or auxiliary tools and libraries such as documentation generation
 * **Scope** (Optional): The directory or component affected (e.g., `kubernetes`, `jira`, `git`).
 * **Example**: `feat(kubernetes): add ingress controller support`
+
+## 📦 Release Generation
+
+When asked to prepare a release or if you've completed a significant set of features/fixes that warrant a release:
+
+1. **Determine Version**: Check the latest release and determine the next version number based on Semantic Versioning (major, minor, or patch) and your changes.
+2. **Create Release**:
+    * Draft a new release in GitHub.
+    * Tag: Use the version number (e.g., `v1.2.3`).
+    * Title: `Release v1.2.3` (or similar).
+    * Description: Generate release notes based on the changes (Conventional Commits help here).
+3. **Automation**: Publishing the release will automatically trigger the `.github/workflows/update-homebrew.yml` workflow.
+    * This workflow updates the Homebrew formula in the `joaopires/homebrew-tap` repository.
+    * It calculates the SHA256 of the source code tarball and updates the formula to point to the new tag.
+4. **Verification**:
+    * Monitor the "Update Homebrew Formula" action in the Actions tab.
+    * Once successful, the `local-gitops` tool can be upgraded via `brew upgrade local-gitops` (users might need to `brew update` first).
