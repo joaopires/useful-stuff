@@ -37,6 +37,7 @@ The `kubernetes/` directory contains a self-contained local platform.
 2. **Makefiles**: The `kubernetes/Makefile` is the source of truth for the local infrastructure. Read it to understand the deployment flow.
 3. **Idempotency**: Scripts should ideally be idempotent. If modifying them, ensure they handle re-runs gracefully.
 4. **Dependencies**: Be aware that scripts might depend on external tools (e.g., `kind`, `helm`, `kubectl`, `jq`).
+5. **Documentation**: Whenever you modify code, scripts, or workflows, you MUST update the corresponding `README.md` to reflect the changes (e.g., new flags, changed behavior, usage instructions).
 
 ## 📝 Commit Standards
 

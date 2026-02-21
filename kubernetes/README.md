@@ -46,22 +46,33 @@ Once `make up` completes, you can access:
 
 ### 3. Deploy an Application
 
-To deploy a new application from a Gitea repository to ArgoCD:
+To deploy a new application from a Gitea repository to ArgoCD, you can use the interactive wizard or provide a configuration file.
 
-1. **Create a Repo**: Create a repository in Gitea (e.g., `my-app`) and push your Helm chart or manifests to it.
-2. **Run Deploy Wizard**:
+#### Interactive Wizard
+
+1. **Run Deploy Wizard**:
 
     ```bash
     make deploy-app
     ```
 
-3. **Follow Prompts**:
+2. **Follow Prompts**:
     - **App Name**: Name for the ArgoCD Application (e.g., `my-app`).
     - **Project**: ArgoCD project (default: `default`).
     - **Repo Name**: The name of your Gitea repository (e.g., `my-app`).
     - **Path**: Path to charts/manifests inside the repo (e.g., `charts/my-app` or `.`).
     - **Namespace**: Target namespace for the app (e.g., `my-app-dev`).
     - **Value Files**: Optional list of value files (e.g., `values.yaml`).
+
+#### From File
+
+You can also deploy a single application by providing a configuration file (same format as bulk deployment):
+
+```bash
+make deploy-app FILE=path/to/app.yaml
+```
+
+The file should follow the same format as described in the **Deploy Multiple Applications** section.
 
 ### 4. Deploy Multiple Applications (Bulk)
 

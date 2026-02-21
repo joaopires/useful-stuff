@@ -70,40 +70,48 @@ deploy-apps: ## Deploy multiple apps from a folder (Usage: make deploy-apps FOLD
 		$(HELM) upgrade --install $$app_name charts/argocd -n argocd --set name=$$app_name -f $$file; \
 	done
 
-deploy-app: ## Deploy an application interactively (prompts for input)
-	@echo "Deploying application using Helm chart..."
-	@read -p "Enter Application Name (this will be the ArgoCD Application name): " name; \
-	if [ -z "$$name" ]; then echo "Name is required"; exit 1; fi; \
-	read -p "Enter ArgoCD Project [default]: " project; \
-	project=$${project:-default}; \
-	read -p "Enter Repository Name (the name given to the repository upon creation): " repo_name; \
-	if [ -z "$$repo_name" ]; then echo "Repo Name is required"; exit 1; fi; \
-	read -p "Enter Path in Repository (root path to helm charts or manifests inside the repository): " path; \
-	read -p "Enter Target Namespace: " dest_ns; \
-	echo "Enter value files separated by commas (e.g., values.yaml,values-dev.yaml)."; \
-	echo "  - Required ONLY if deploying a Helm chart."; \
-	echo "  - Order matters! Later files override earlier ones."; \
-	read -p "Enter Value Files (optional): " value_files_input; \
-	\
-	echo "Deploying $$name..."; \
-	cmd="$(HELM) upgrade --install $$name charts/argocd -n argocd \
-		--set name=$$name \
-		--set project=$$project \
-		--set repoName=$$repo_name \
-		--set path=$$path \
-		--set destinationNamespace=$$dest_ns"; \
-	\
-	if [ -n "$$value_files_input" ]; then \
-		IFS=',' read -r -a vfs <<< "$$value_files_input"; \
-		i=0; \
-		for vf in "$${vfs[@]}"; do \
-			cmd="$$cmd --set helm.valueFiles[$$i]=$$vf"; \
-			i=$$((i+1)); \
-		done; \
-	fi; \
-	\
-	echo "Running: $$cmd"; \
-	eval $$cmd
+deploy-app: ## Deploy an application interactively or from a file (Usage: make deploy-app [FILE=path/to/app.yaml])
+	@if [ -n "$(FILE)" ]; then \
+		echo "Deploying application from $(FILE)..."; \
+		if [ ! -f "$(FILE)" ]; then echo "Error: File $(FILE) not found"; exit 1; fi; \
+		app_name=$$(basename $(FILE) .yaml); \
+		echo "Deploying $$app_name..."; \
+		$(HELM) upgrade --install $$app_name charts/argocd -n argocd --set name=$$app_name -f $(FILE); \
+	else \
+		echo "Deploying application using Helm chart (Interactive Mode)..."; \
+		read -p "Enter Application Name (this will be the ArgoCD Application name): " name; \
+		if [ -z "$$name" ]; then echo "Name is required"; exit 1; fi; \
+		read -p "Enter ArgoCD Project [default]: " project; \
+		project=$${project:-default}; \
+		read -p "Enter Repository Name (the name given to the repository upon creation): " repo_name; \
+		if [ -z "$$repo_name" ]; then echo "Repo Name is required"; exit 1; fi; \
+		read -p "Enter Path in Repository (root path to helm charts or manifests inside the repository): " path; \
+		read -p "Enter Target Namespace: " dest_ns; \
+		echo "Enter value files separated by commas (e.g., values.yaml,values-dev.yaml)."; \
+		echo "  - Required ONLY if deploying a Helm chart."; \
+		echo "  - Order matters! Later files override earlier ones."; \
+		read -p "Enter Value Files (optional): " value_files_input; \
+		\
+		echo "Deploying $$name..."; \
+		cmd="$(HELM) upgrade --install $$name charts/argocd -n argocd \
+			--set name=$$name \
+			--set project=$$project \
+			--set repoName=$$repo_name \
+			--set path=$$path \
+			--set destinationNamespace=$$dest_ns"; \
+		\
+		if [ -n "$$value_files_input" ]; then \
+			IFS=',' read -r -a vfs <<< "$$value_files_input"; \
+			i=0; \
+			for vf in "$${vfs[@]}"; do \
+				cmd="$$cmd --set helm.valueFiles[$$i]=$$vf"; \
+				i=$$((i+1)); \
+			done; \
+		fi; \
+		\
+		echo "Running: $$cmd"; \
+		eval $$cmd; \
+	fi
 
 info: ## Show access information for ArgoCD and Gitea
 	@echo "========================================================"
