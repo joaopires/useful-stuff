@@ -114,15 +114,21 @@ deploy-app: ## Deploy an application interactively or from a file (Usage: make d
 	fi
 
 info: ## Show access information for ArgoCD and Gitea
-	@echo "========================================================"
-	@echo "Access Information:"
-	@echo "--------------------------------------------------------"
-	@echo "ArgoCD:"
-	@echo "  URL: https://argocd.localhost (Accept self-signed cert)"
-	@echo "  Username: admin"
-	@echo "  Password: $$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)"
-	@echo ""
-	@echo "Gitea:"
-	@echo "  URL: http://gitea.localhost"
-	@echo "  User/Pass: gitea / gitea (as configured in manifest)"
-	@echo "========================================================"
+	@echo "Checking service status..."
+	@if $(KUBECTL) get deployment -n argocd argocd-server >/dev/null 2>&1 && \
+	    $(KUBECTL) get deployment -n gitea gitea >/dev/null 2>&1; then \
+		echo "========================================================"; \
+		echo "Access Information:"; \
+		echo "--------------------------------------------------------"; \
+		echo "ArgoCD:"; \
+		echo "  URL: https://argocd.localhost (Accept self-signed cert)"; \
+		echo "  Username: admin"; \
+		echo "  Password: $$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)"; \
+		echo ""; \
+		echo "Gitea:"; \
+		echo "  URL: http://gitea.localhost"; \
+		echo "  User/Pass: gitea / gitea (as configured in manifest)"; \
+		echo "========================================================"; \
+	else \
+		echo "Services are not fully ready yet. Please run 'up' or wait a few moments."; \
+	fi
