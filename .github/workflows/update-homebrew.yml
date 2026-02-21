@@ -1,0 +1,63 @@
+name: Update Homebrew Formula
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-formula:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Tap Repository
+        uses: actions/checkout@v3
+        with:
+          repository: joaopires/homebrew-tap
+          token: ${{ secrets.PAT_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update Formula
+        run: |
+          # 1. Get Release Details
+          TAG=${{ github.event.release.tag_name }}
+          # Assuming the repo name is 'useful-stuff' based on current context
+          URL="https://github.com/joaopires/useful-stuff/archive/refs/tags/${TAG}.tar.gz"
+
+          echo "Updating formula for release $TAG"
+          echo "URL: $URL"
+
+          # 2. Calculate SHA256
+          echo "Calculating SHA256..."
+          SHA=$(curl -sL "$URL" | shasum -a 256 | cut -d ' ' -f 1)
+          echo "SHA256: $SHA"
+
+          # 3. Update the Formula File
+          # Path to formula in the tap repo. Assuming it's at the root as per instructions.
+          FORMULA_PATH="homebrew-tap/local-gitops.rb"
+
+          if [ ! -f "$FORMULA_PATH" ]; then
+            echo "Error: Formula file not found at $FORMULA_PATH"
+            # Fallback: Check inside Formula/ directory
+            if [ -f "homebrew-tap/Formula/local-gitops.rb" ]; then
+               FORMULA_PATH="homebrew-tap/Formula/local-gitops.rb"
+               echo "Found formula at $FORMULA_PATH"
+            else
+               echo "Could not find local-gitops.rb in root or Formula/ directory."
+               exit 1
+            fi
+          fi
+
+          # Use sed to update the url and sha256 fields
+          # We use | as delimiter to avoid issues with slashes in URLs
+          sed -i "s|url \".*\"|url \"$URL\"|" "$FORMULA_PATH"
+          sed -i "s|sha256 \".*\"|sha256 \"$SHA\"|" "$FORMULA_PATH"
+
+          echo "Formula updated locally. Verifying changes:"
+          grep -E "url|sha256" "$FORMULA_PATH"
+
+          # 4. Commit and Push
+          cd homebrew-tap
+          git config user.name "GitHub Action"
+          git config user.email "action@github.com"
+          git add .
+          git commit -m "Update local-gitops formula to $TAG"
+          git push
