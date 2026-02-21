@@ -1,0 +1,7 @@
+name: my-app
+project: default
+repoURL: ""
+path: ""
+destinationNamespace: default
+helm:
+  valueFiles: []

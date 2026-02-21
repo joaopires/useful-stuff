@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitea
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitea-data
+  namespace: gitea
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea
+  namespace: gitea
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gitea
+  strategy:
+    type: Recreate # Important when using RWO volumes
+  template:
+    metadata:
+      labels:
+        app: gitea
+    spec:
+      containers:
+      - name: gitea
+        image: gitea/gitea:latest
+        ports:
+        - containerPort: 3000
+          name: http
+        - containerPort: 22
+          name: ssh
+        env:
+        - name: USER_UID
+          value: "1000"
+        - name: USER_GID
+          value: "1000"
+        - name: GITEA__webhook__ALLOWED_HOST_LIST
+          value: "*" # Automatically configures the webhook permission!
+        - name: GITEA__webhook__SKIP_TLS_VERIFY
+          value: "true"
+        - name: GITEA__server__ROOT_URL
+          value: "http://gitea-http.gitea.svc.cluster.local:3000/"
+        - name: GITEA__security__INSTALL_LOCK
+          value: "true"
+        lifecycle:
+          postStart:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - |
+                until curl -sSf http://localhost:3000/api/v1/version >/dev/null 2>&1; do sleep 1; done;
+                su-exec git /usr/local/bin/gitea admin user create --admin --username gitea --password gitea --email gitea@local.domain --must-change-password=false
+        volumeMounts:
+        - name: gitea-data
+          mountPath: /data
+      volumes:
+      - name: gitea-data
+        persistentVolumeClaim:
+          claimName: gitea-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitea-http
+  namespace: gitea
+spec:
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: http
+  - port: 22
+    targetPort: 22
+    name: ssh
+  selector:
+    app: gitea
