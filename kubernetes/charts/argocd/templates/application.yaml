@@ -6,7 +6,7 @@ metadata:
 spec:
   project: {{ .Values.project | default "default" }}
   source:
-    repoURL: {{ .Values.repoURL }}
+    repoURL: http://gitea-http.gitea.svc.cluster.local:3000/gitea/{{ .Values.repoName }}.git
     targetRevision: main
     path: {{ .Values.path }}
 {{- if .Values.helm }}

@@ -6,45 +6,41 @@ A collection of useful scripts, configurations, and tools for daily development 
 
 ### 🛠 Scripts (`/sh`)
 
+A collection of useful shell scripts. See [sh/README.md](sh/README.md) for detailed documentation.
+
 - **Jira Tools (`/sh/jira`)**:
-  - `create_tickets.sh`: A shell script to bulk create Jira tickets from a CSV file using Jira REST API v3. Supports dry-runs and handles Story Points, Labels, and ADF descriptions.
+  - `create_tickets.sh`: Bulk create Jira tickets from CSV.
 
 ### ⚙️ Git Utilities (`/git`)
 
-- **Hooks (`/git/hooks`)**:
-  - `post-worktree-add.sh`: A script designed to automate environment setup (like symlinking `.vscode` folders) after adding a new git worktree.
+A collection of useful Git hooks and utilities. See [git/README.md](git/README.md) for detailed documentation.
 
-  #### Setup:
-  1. Edit `git/hooks/post-worktree-add.sh` to set your `MAIN_VSCODE_PATH`.
-  2. To use it in a repository, symlink it to your local hooks:
-     ```bash
-     ln -s /path/to/useful-stuff/git/hooks/post-worktree-add.sh .git/hooks/post-worktree-add
-     ```
-     *Note: Standard Git does not natively support `post-worktree-add`. You may need to call this script from `post-checkout` or use a hook manager that supports it.*
+- **Hooks (`/git/hooks`)**:
+  - `post-worktree-add.sh`: Automate environment setup after adding a git worktree.
 
 ### 🐚 Zsh Plugins (`/oh-my-zsh`)
 
+Custom plugins for Zsh. See [oh-my-zsh/README.md](oh-my-zsh/README.md) for detailed documentation.
+
 - **Bare Clone (`/oh-my-zsh/bare-clone`)**:
-  - `bare-clone.plugin.zsh`: A plugin providing the `git-bare-clone` function. It automates the setup of a bare repository with worktree support, including refspec configuration and upstream tracking.
+  - `bare-clone.plugin.zsh`: Automates the setup of a bare repository with worktree support.
 
----
+### ☸️ Kubernetes (`/kubernetes`)
 
-## 🚀 Getting Started
+A complete local GitOps environment using Kind, ArgoCD, and Gitea.
 
-To use any of the scripts, ensure they have execution permissions:
+- **Features**:
+  - Automated Kind cluster creation with port mappings (80/443).
+  - Pre-installed ArgoCD and Gitea.
+  - Ingress configuration for localhost access.
+  - Helm chart for creating ArgoCD Applications.
+  - Interactive CLI for deploying apps.
 
-```bash
-chmod +x sh/jira/create_tickets.sh
-chmod +x git/hooks/post-worktree-add.sh
-```
+- **Usage**:
+  - `make up`: Spin up the entire environment.
+  - `make deploy-app`: Interactively deploy a new application to ArgoCD.
+  - `make down`: Destroy the cluster.
 
-### Jira Ticket Creator Usage
-
-```bash
-export JIRA_AUTH="email@example.com:api-token"
-./sh/jira/create_tickets.sh [-d] [-h] <csv_filepath> <jira_organization> <project_key>
-```
-
-### Bare Clone Plugin
-
-To use the `git-bare-clone` plugin, source it in your `.zshrc` or copy it to your custom Oh My Zsh plugins folder.
+- **Access**:
+  - Gitea: `http://gitea.localhost`
+  - ArgoCD: `https://argocd.localhost`
