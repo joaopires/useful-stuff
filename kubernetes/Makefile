@@ -4,7 +4,7 @@ KUBECTL := kubectl
 HELM := helm
 REQUIRED_TOOLS := $(KIND) $(KUBECTL) $(HELM) docker
 
-.PHONY: help up down check-tools cluster-create install-ingress install-argocd install-gitea install-ingress-routes info deploy-app
+.PHONY: help up down check-tools cluster-create install-ingress install-argocd install-gitea install-ingress-routes info deploy-app deploy-apps
 
 help: ## Show this help message
 	@echo "Usage: make [target]"
@@ -59,6 +59,16 @@ install-ingress-routes: ## Apply Ingress routes for Gitea and ArgoCD
 	@echo "Configuring Ingress routes..."
 	$(KUBECTL) apply -f manifests/ingress.yaml
 	@echo "Ingress routes configured."
+
+deploy-apps: ## Deploy multiple apps from a folder (Usage: make deploy-apps FOLDER=path/to/folder)
+	@if [ -z "$(FOLDER)" ]; then echo "FOLDER is required"; exit 1; fi
+	@echo "Deploying apps from $(FOLDER)..."
+	@for file in $(FOLDER)/*.yaml; do \
+		if [ ! -f "$$file" ]; then continue; fi; \
+		app_name=$$(basename $$file .yaml); \
+		echo "Deploying $$app_name..."; \
+		$(HELM) upgrade --install $$app_name charts/argocd -n argocd --set name=$$app_name -f $$file; \
+	done
 
 deploy-app: ## Deploy an application interactively (prompts for input)
 	@echo "Deploying application using Helm chart..."

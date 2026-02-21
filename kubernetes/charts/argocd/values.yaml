@@ -1,7 +1,29 @@
+# ArgoCD Application Configuration
+# This file serves as a default/template.
+# When using `make deploy-apps`, override these values in your app-specific YAML files.
+
+# Name of the ArgoCD Application
+# Note: When using `make deploy-apps`, this value is ignored and overridden by the filename.
 name: my-app
+
+# ArgoCD Project
 project: default
-repoURL: ""
+
+# Name of the Gitea repository (e.g., 'my-app-repo')
+# required
+repoName: ""
+
+# Path to the Helm chart or manifests within the repository
+# required
 path: ""
+
+# Target namespace for the application
 destinationNamespace: default
+
+# Helm-specific configuration
 helm:
+  # List of value files to include (relative to the chart root in the repo)
+  # order matters: later files override earlier ones
   valueFiles: []
+    # - values.yaml
+    # - values-dev.yaml

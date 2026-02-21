@@ -63,7 +63,31 @@ To deploy a new application from a Gitea repository to ArgoCD:
     - **Namespace**: Target namespace for the app (e.g., `my-app-dev`).
     - **Value Files**: Optional list of value files (e.g., `values.yaml`).
 
-### 4. Stop the Environment
+### 4. Deploy Multiple Applications (Bulk)
+
+To deploy multiple applications at once, create a folder containing YAML configuration files (one per app) and run:
+
+```bash
+make deploy-apps FOLDER=path/to/my-apps
+```
+
+**File Format:**
+Each YAML file in the folder represents the values for the `charts/argocd` chart. The filename (e.g., `my-app.yaml`) determines the ArgoCD Application name (`my-app`).
+
+Example `my-apps/app1.yaml`:
+
+```yaml
+repoName: my-app-repo        # Required: Gitea repository name
+path: charts/app1            # Required: Path to chart in repo
+destinationNamespace: dev    # Optional: Default is 'default'
+project: default             # Optional: Default is 'default'
+helm:
+  valueFiles:                # Optional: List of value files in the repo
+    - values.yaml
+    - values-dev.yaml
+```
+
+### 5. Stop the Environment
 
 To destroy the cluster and clean up:
 
