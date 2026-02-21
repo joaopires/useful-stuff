@@ -16,15 +16,21 @@ class LocalGitops < Formula
 
     # Create a wrapper script named 'local-gitops' in the bin directory.
     # This script will execute 'make' inside the libexec directory.
-    (bin/"local-gitops").write <<~EOS
+    (bin/command_name).write <<~EOS
       #!/bin/bash
       # Forward all arguments to make in the installation directory
-      exec make -C #{libexec} "$@"
+      exec make -C #{libexec} CMD=#{command_name} "$@"
     EOS
   end
 
   test do
     # Simple test to verify the command is available and help output works
-    assert_match "Usage: make [target]", shell_output("#{bin}/local-gitops help")
+    assert_match "Usage: #{command_name} [target]", shell_output("#{bin}/#{command_name} help")
+  end
+
+  private
+
+  def command_name
+    "local-gitops"
   end
 end

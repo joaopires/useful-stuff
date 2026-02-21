@@ -114,3 +114,13 @@ make down
 - **`kind-config.yaml`**: Kind cluster configuration with port mappings.
 - **`charts/argocd/`**: A Helm chart used to template ArgoCD Application resources.
 - **`manifests/`**: Raw Kubernetes manifests for infrastructure (Gitea, Ingress).
+
+## ⚙️ Advanced
+
+### Customizing Help Output
+
+If you are wrapping this `Makefile` in another script (e.g., `local-gitops`), you can customize the command name shown in the help output by setting the `CMD` variable:
+
+```bash
+make help CMD=local-gitops
+```

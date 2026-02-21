@@ -46,11 +46,28 @@ To let users install this easily, you should create a **Tap**.
 
 ## 🧪 Local Testing
 
-You can test the formula locally before publishing:
+You can test the formula locally before publishing by using a local tap.
 
-```bash
-brew install --build-from-source ./packaging/k8s/homebrew/local-gitops.rb
-```
+1. **Create a local tap** (if you haven't already):
+
+    ```bash
+    brew tap-new local/gitops
+    ```
+
+2. **Symlink the formula**:
+
+    ```bash
+    mkdir -p $(brew --repo local/gitops)/Formula
+    ln -s $(pwd)/packaging/k8s/homebrew/local-gitops.rb $(brew --repo local/gitops)/Formula/local-gitops.rb
+    ```
+
+3. **Install from the local tap**:
+
+    ```bash
+    brew install --build-from-source local/gitops/local-gitops
+    ```
+
+> **Note**: If you are testing changes to the `install` method, you may need to uninstall first: `brew uninstall local-gitops`
 
 ## 🤖 Automation (Optional)
 

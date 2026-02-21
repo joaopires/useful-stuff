@@ -4,13 +4,16 @@ KUBECTL := kubectl
 HELM := helm
 REQUIRED_TOOLS := $(KIND) $(KUBECTL) $(HELM) docker
 
+# Allow overriding the command name for help text (e.g., when wrapped by a script)
+CMD ?= make
+
 .PHONY: help up down check-tools cluster-create install-ingress install-argocd install-gitea install-ingress-routes info deploy-app deploy-apps
 
 help: ## Show this help message
-	@echo "Usage: make [target]"
+	@echo "Usage: $(CMD) [target]"
 	@echo ""
 	@echo "Targets:"
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sed 's/make /$(CMD) /g'
 
 check-tools: ## Check if required tools are installed
 	@echo "Checking dependencies..."
