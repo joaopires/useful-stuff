@@ -19,45 +19,57 @@ jobs:
         run: |
           # 1. Get Release Details
           TAG=${{ github.event.release.tag_name }}
-          # Assuming the repo name is 'useful-stuff' based on current context
           URL="https://github.com/joaopires/useful-stuff/archive/refs/tags/${TAG}.tar.gz"
 
           echo "Updating formula for release $TAG"
           echo "URL: $URL"
 
-          # 2. Calculate SHA256
+          # 2. Download and Verify
+          echo "Downloading tarball..."
+          # Use curl with retry and fail on error
+          curl -sL --fail --retry 3 --retry-delay 5 -o source.tar.gz "$URL"
+
+          if [ ! -s source.tar.gz ]; then
+            echo "Error: Downloaded file is empty or missing."
+            exit 1
+          fi
+
+          # Optional: Check if it's actually a gzip file
+          file source.tar.gz | grep "gzip compressed data" || { echo "Error: Not a gzip file"; exit 1; }
+
+          # 3. Calculate SHA256
           echo "Calculating SHA256..."
-          SHA=$(curl -sL "$URL" | shasum -a 256 | cut -d ' ' -f 1)
+          SHA=$(shasum -a 256 source.tar.gz | cut -d ' ' -f 1)
           echo "SHA256: $SHA"
 
-          # 3. Update the Formula File
-          # Path to formula in the tap repo. Assuming it's at the root as per instructions.
+          # 4. Update the Formula File
           FORMULA_PATH="homebrew-tap/local-gitops.rb"
 
           if [ ! -f "$FORMULA_PATH" ]; then
-            echo "Error: Formula file not found at $FORMULA_PATH"
-            # Fallback: Check inside Formula/ directory
             if [ -f "homebrew-tap/Formula/local-gitops.rb" ]; then
                FORMULA_PATH="homebrew-tap/Formula/local-gitops.rb"
-               echo "Found formula at $FORMULA_PATH"
             else
-               echo "Could not find local-gitops.rb in root or Formula/ directory."
+               echo "Could not find local-gitops.rb"
                exit 1
             fi
           fi
 
-          # Use sed to update the url and sha256 fields
-          # We use | as delimiter to avoid issues with slashes in URLs
+          # Update using sed
           sed -i "s|url \".*\"|url \"$URL\"|" "$FORMULA_PATH"
           sed -i "s|sha256 \".*\"|sha256 \"$SHA\"|" "$FORMULA_PATH"
 
-          echo "Formula updated locally. Verifying changes:"
-          grep -E "url|sha256" "$FORMULA_PATH"
+          echo "Formula updated locally."
 
-          # 4. Commit and Push
+          # 5. Commit and Push
           cd homebrew-tap
           git config user.name "GitHub Action"
           git config user.email "action@github.com"
-          git add .
-          git commit -m "Update local-gitops formula to $TAG"
-          git push
+
+          # Only commit if there are changes
+          if git diff --quiet; then
+            echo "No changes to commit."
+          else
+            git add .
+            git commit -m "Update local-gitops formula to $TAG"
+            git push
+          fi
