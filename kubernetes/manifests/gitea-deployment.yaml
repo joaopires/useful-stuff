@@ -61,7 +61,11 @@ spec:
               - -c
               - |
                 until curl -sSf http://localhost:3000/api/v1/version >/dev/null 2>&1; do sleep 1; done;
-                su-exec git /usr/local/bin/gitea admin user create --admin --username gitea --password gitea --email gitea@local.domain --must-change-password=false
+                su-exec git /usr/local/bin/gitea admin user create --admin --username gitea --password gitea --email gitea@local.domain --must-change-password=false || true
+                curl -X POST "http://localhost:3000/api/v1/user/hooks" \
+                  -H "Content-Type: application/json" \
+                  -u gitea:gitea \
+                  -d '{"type": "gitea", "config": { "url": "http://argocd-server.argocd.svc.cluster.local/api/webhook", "content_type": "json" }, "events": ["push"], "active": true}' || true
         volumeMounts:
         - name: gitea-data
           mountPath: /data
