@@ -179,6 +179,7 @@ Network traffic is restricted using Kubernetes NetworkPolicies.
 | PostgreSQL nodes | 10200/TCP (PP) / 5432/TCP (dev/prd) | Database connections |
 | `kube-system/kube-dns` | 53/UDP | DNS resolution |
 | `observability/otlp-collector` | 4317/TCP | OpenTelemetry traces |
+| Internet (`0.0.0.0/0` except `10.0.0.0/8`) | 443/TCP | External API access (Vusion Manager, VLink) |
 
 ### Database CIDRs (Preproduction)
 
@@ -209,8 +210,8 @@ The DataFetch API is exposed via a Traefik ingress with TLS termination:
 | Setting | Development | Preproduction | Production |
 |---|---|---|---|
 | **Namespace** | `instore-esl-orchestrator-dev` | `instore-esl-orchestrator-pp` | `instore-esl-orchestrator-prd` |
-| **Pipeline schedule** | `0 3 * * *` (3:00 AM) | `40 01 * * *` (1:40 AM) | `0 3 * * *` (3:00 AM) |
-| **Store filter** | All stores | 9 specific stores | All stores |
+| **Pipeline schedule** | `0 3 * * *` (3:00 AM) | `45 16 * * *` (16:45 UTC) | `0 3 * * *` (3:00 AM) |
+| **Store filter** | All stores | 4 specific stores | All stores |
 | **DB port** | 5432 | 10200 | 5432 |
 | **Image tags** | Placeholder | Active | Placeholder |
 | **Secrets** | Placeholder | Configured | Placeholder |

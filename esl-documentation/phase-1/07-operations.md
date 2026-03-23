@@ -37,9 +37,8 @@ git push origin feature/<description>
 Edit the `schedule` field in the environment's values file under the data pipeline CronJob section:
 
 ```yaml
-- name: orchestrator-esl-datapipeline
+dataPipeline:
   schedule: "0 6 * * *"   # Every day at 06:00 UTC
-  timeZone: "UTC"
 ```
 
 The schedule uses standard cron syntax. All times are in **UTC**.
@@ -57,34 +56,25 @@ The schedule uses standard cron syntax. All times are in **UTC**.
 
 ### Filtering Stores
 
-Store filters restrict which stores the pipeline processes. Edit the connector settings in the values file:
+Store filters restrict which stores the pipeline processes. Edit the `filterStores` list under `dataPipeline.config` in the values file:
 
 **Process specific stores:**
 
 ```yaml
-connector:
-  filter_stores:
-    - "continente_pt.001234"
-    - "bomdia_pt.009648"
-```
-
-**Process all stores from specific retail chains:**
-
-```yaml
-connector:
-  filter_stores: []
-  filter_retail_chains:
-    - "continente_pt"
+dataPipeline:
+  config:
+    filterStores:
+      - "continente_pt.001234"
+      - "bomdia_pt.009648"
 ```
 
 **Process all stores:**
 
 ```yaml
-connector:
-  filter_stores: []
+dataPipeline:
+  config:
+    filterStores: []
 ```
-
-> **Priority:** If `filter_stores` has entries, `filter_retail_chains` is ignored.
 
 ### Running an Ad-Hoc Pipeline Execution
 
