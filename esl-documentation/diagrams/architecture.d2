@@ -1,0 +1,133 @@
+direction: right
+
+vusion_manager: Vusion Manager API {
+  shape: cloud
+  # icon: icons/cloud.svg
+  style.fill: "#e8f4fd"
+  style.stroke: "#1565c0"
+  style.font-color: "#1565c0"
+}
+
+vlink: VLink API {
+  shape: cloud
+  # icon: icons/cloud.svg
+  style.fill: "#e8f4fd"
+  style.stroke: "#1565c0"
+  style.font-color: "#1565c0"
+}
+
+pipeline: Data Pipeline {
+  # icon: icons/pipeline.svg
+  label.near: top-center
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.font-color: "#e65100"
+  style.bold: true
+
+  connector: Connector {
+    style.fill: "#ffe0b2"
+  }
+  transformer: Transformer {
+    style.fill: "#ffe0b2"
+  }
+  sink: Sink {
+    style.fill: "#ffe0b2"
+  }
+
+  connector -> transformer: records
+  transformer -> sink: normalised
+}
+
+db: PostgreSQL {
+  icon: icons/postgresql.svg
+  label.near: top-center
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.font-color: "#2e7d32"
+  style.bold: true
+
+  esl_schema: esl schema {
+    style.fill: "#c8e6c9"
+
+    stores: stores {
+      style.fill: "#a5d6a7"
+    }
+    products: products {
+      style.fill: "#a5d6a7"
+    }
+    labels: labels {
+      style.fill: "#a5d6a7"
+    }
+    access_points: access_points {
+      style.fill: "#a5d6a7"
+    }
+  }
+
+  state: Sync State {
+    style.fill: "#c8e6c9"
+
+    sync_state: sync_state {
+      style.fill: "#a5d6a7"
+    }
+    store_sync_state: store_sync_state {
+      style.fill: "#a5d6a7"
+    }
+  }
+
+  errors: Error Tracking {
+    style.fill: "#ffcdd2"
+    style.stroke: "#c62828"
+
+    records_with_errors: records_with_errors {
+      style.fill: "#ef9a9a"
+    }
+  }
+}
+
+api: DataFetch API {
+  icon: icons/api.svg
+  label.near: top-center
+  style.fill: "#f3e5f5"
+  style.stroke: "#6a1b9a"
+  style.font-color: "#6a1b9a"
+  style.bold: true
+
+  rest: REST Endpoints {
+    style.fill: "#e1bee7"
+  }
+  metrics: Prometheus Metrics {
+    style.fill: "#e1bee7"
+  }
+}
+
+consumers: Downstream\nConsumers {
+  shape: person
+  style.fill: "#fce4ec"
+  style.stroke: "#880e4f"
+  width: 64
+  height: 64
+}
+
+# Data flow
+vusion_manager -> pipeline.connector: stores {
+  style.stroke: "#1565c0"
+}
+vlink -> pipeline.connector: products, labels {
+  style.stroke: "#1565c0"
+}
+
+pipeline.sink -> db.esl_schema: upsert {
+  style.stroke: "#e65100"
+  style.bold: true
+}
+pipeline.connector <-> db.state: sync state {
+  style.stroke: "#e65100"
+  style.stroke-dash: 3
+}
+
+db.esl_schema -> api.rest: read-only {
+  style.stroke: "#6a1b9a"
+}
+api.rest -> consumers: JSON {
+  style.stroke: "#880e4f"
+}
