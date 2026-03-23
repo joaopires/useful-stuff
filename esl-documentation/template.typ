@@ -9,8 +9,10 @@
 
 #set table(
   inset: 6pt,
-  stroke: none
+  stroke: 0.5pt + luma(180),
 )
+
+#show table.cell: set text(size: 10pt)
 
 #show figure.where(
   kind: table

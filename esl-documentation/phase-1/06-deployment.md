@@ -16,7 +16,7 @@ The deployment consists of three workload types:
 
 ArgoCD manages the deployment lifecycle using sync hooks to enforce ordering:
 
-![Deployment Flow](diagrams/deployment-flow.svg)
+![Deployment Flow](diagrams/deployment-flow.svg){width=80%}
 
 ### PreSync Phase (Weight 0)
 
