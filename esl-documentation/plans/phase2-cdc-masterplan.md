@@ -1,0 +1,88 @@
+# Phase 2: CDC Event Detection — Master Plan
+
+## Context
+
+Phase 1 established a data pipeline that syncs ESL data from Vusion APIs into PostgreSQL via batched upserts. Phase 2 adds Change Data Capture: detecting CREATED and MODIFIED records during each pipeline execution and publishing events to Solace with guaranteed delivery and no duplications. DELETED events deferred to a later iteration.
+
+## Architecture
+
+```
+[Existing Pipeline]                        [New Components]
+Connector → Transformer → Sink ──┐
+                                  │  same DB transaction
+                          ┌──────┴──────┐
+                          │  PostgreSQL  │
+                          │  ┌────────┐  │
+                          │  │ tables  │  │
+                          │  ├────────┤  │
+                          │  │ outbox  │  │
+                          │  └───┬────┘  │
+                          └──────┼──────┘
+                                 │ poll
+                     ┌───────────┴───────────┐
+                     │    Event Publisher     │
+                     │  (separate repo,       │──→ Solace
+                     │   K8s Deployment)      │    topic: esl/events/{entity}
+                     └───────────────────────┘
+
+[Shared Go Package: esl-go-commons]
+  - Used by: datapipeline, event-publisher
+  - Contains: outbox types, entity key definitions
+```
+
+## Key Decisions (resolved)
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Change detection | Pre-fetch + in-Go classification | Diff payloads require old values → pre-fetch mandatory → classification is free |
+| Delivery guarantee | Transactional outbox pattern | Atomic with upsert, decoupled publisher, no dual-write problem |
+| Event payload | Diff (CREATED=full snapshot, MODIFIED=changed fields only) | User preference |
+| `last_updated_at` | Unchanged behavior (always refreshes) | Internal audit only, no query changes needed |
+| Repo layout | Separate repo + shared `esl-go-commons` package | Follows one-repo-per-component pattern, clean SRP |
+| Solace topics | `esl/events/{entity_type}` | Event type in payload, not topic. Schema TBD |
+| Feature flag | `cdc.enabled` in sink config | Safe rollout, existing behavior preserved when off |
+| Comparison scope | All non-PK, non-audit columns | `created_at`/`last_updated_at` excluded; source `modification_date` included |
+
+## Open Questions
+
+- **Solace messaging mode:** Persistent (guaranteed, needs queue provisioning) or direct?
+- **Outbox retention period:** 7 days? 30 days? Configurable per env?
+- **`esl-go-commons` repo hosting:** Same GitHub org as other ESL repos?
+
+## Implementation Order
+
+```
+1. esl-go-commons ──┐
+                     ├──→ 3. datapipeline CDC ──┐
+2. database migrations ┘                        ├──→ 5. k8s helm
+                     ┌──→ 4. event-publisher ───┘
+                     │
+              (1 + 2 done)
+```
+
+## Documentation
+
+After completing each scoped plan's implementation (with user supervision), produce Phase 2 documentation inside `esl-documentation/phase-2/`, following the same structure as `phase-1/`:
+
+- All files live under `esl-documentation/phase-2/`
+- Separate markdown files per section (`NN-<section>.md`)
+- Front matter only in `01-introduction.md`
+- Diagrams in `esl-documentation/phase-2/diagrams/` (Excalidraw → SVG)
+- PDF generation via the existing pandoc + typst pipeline
+
+Documentation should be written incrementally — each completed scoped plan produces or updates the relevant section(s) rather than deferring all docs to the end.
+
+| Scoped plan completed | Documentation sections to produce/update |
+|---|---|
+| shared-package + database | Introduction, Architecture overview, Database |
+| datapipeline CDC | Data Pipeline (CDC additions) |
+| event-publisher | Event Publisher (new section) |
+| k8s-helm | Deployment, Operations |
+
+## Scoped Plans
+
+- [phase2-cdc-shared-package.md](phase2-cdc-shared-package.md) — esl-go-commons repo
+- [phase2-cdc-database.md](phase2-cdc-database.md) — Flyway migrations for outbox table
+- [phase2-cdc-datapipeline.md](phase2-cdc-datapipeline.md) — CDC detection in the sink
+- [phase2-cdc-event-publisher.md](phase2-cdc-event-publisher.md) — New publisher service
+- [phase2-cdc-k8s-helm.md](phase2-cdc-k8s-helm.md) — Helm chart changes
