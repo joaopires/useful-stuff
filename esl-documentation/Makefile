@@ -17,7 +17,7 @@ all: phase-1
 
 phase-1: $(P1_PDF)
 
-$(P1_PDF): $(P1_SVG) $(P1_MD)
+$(P1_PDF): $(P1_SVG) $(P1_MD) $(TEMPLATE)
 	pandoc $(P1_MD) \
 		--pdf-engine=typst \
 		--template=$(TEMPLATE) \

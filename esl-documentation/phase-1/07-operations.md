@@ -117,6 +117,16 @@ ORDER BY synced_at DESC
 LIMIT 20;
 ```
 
+To get per-store details for a specific run, filter by `run_id` (which maps to the `id` column in `sync_state`):
+
+```sql
+SELECT store_id, sync_status, products_processed,
+       labels_processed, access_points_processed,
+       synced_at, error_message
+FROM esl.store_sync_state
+WHERE run_id = <sync_state_id>;
+```
+
 ### Viewing Migration Status
 
 Check Flyway migration history from the migration job logs:
