@@ -47,18 +47,37 @@ Connector → Transformer → Sink ──┐
 
 - **Solace messaging mode:** Persistent (guaranteed, needs queue provisioning) or direct?
 - **Outbox retention period:** 7 days? 30 days? Configurable per env?
-- **`esl-go-commons` repo hosting:** Same GitHub org as other ESL repos?
+- **`esl-go-commons` repo hosting:** Same GitHub org as other ESL repos? *(resolved: yes — `sonaemc-instore` org)*
 
 ## Implementation Order
 
 ```
-1. esl-go-commons ──┐
-                     ├──→ 3. datapipeline CDC ──┐
-2. database migrations ┘                        ├──→ 5. k8s helm
-                     ┌──→ 4. event-publisher ───┘
-                     │
-              (1 + 2 done)
+1. esl-go-commons ──────────┐
+                              ├──→ 3. DOCS: intro + architecture + database
+2. database migrations ──────┘                │
+                                              ├──→ 4. datapipeline CDC ──┐
+                                              │                          │
+                                              │    5. event-publisher ───┤
+                                              │                          │
+                                              └──→ 6. DOCS: datapipeline ┤
+                                                   7. DOCS: event-pub ───┤
+                                                                         ├──→ 9. DOCS: deployment + ops
+                                                   8. k8s helm ──────────┘
 ```
+
+### Status
+
+| # | Step | Status |
+|---|------|--------|
+| 1 | esl-go-commons (shared package) | Done |
+| 2 | database migrations (outbox) | Done |
+| 3 | DOCS: introduction, architecture, database | Done |
+| 4 | datapipeline CDC | In progress (planning) |
+| 5 | event-publisher | Not started |
+| 6 | DOCS: data pipeline (CDC additions) | Not started |
+| 7 | DOCS: event publisher | Not started |
+| 8 | k8s helm | Not started |
+| 9 | DOCS: deployment, operations | Not started |
 
 ## Documentation
 

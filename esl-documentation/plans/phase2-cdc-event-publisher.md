@@ -11,10 +11,13 @@ Long-running Go service deployed as K8s Deployment. Polls the outbox table and p
 
 ```
 Poll (1s interval) → SELECT undelivered events (FOR UPDATE SKIP LOCKED)
+  → Validate entity_type against entity.EntityType enum
   → Publish each to Solace topic esl/events/{entity_type}
   → UPDATE delivered_at = NOW() for published event IDs
   → Commit transaction
 ```
+
+**Note:** Use `entity.EntityType` from esl-common when reading `entity_type` from the outbox table and when building Solace topic names. This provides compile-time safety and consistency with the datapipeline.
 
 ## Components
 
@@ -36,6 +39,14 @@ publisher:
   poll_interval: "1s"
   batch_size: 100
 ```
+
+## Code quality: golangci-lint
+
+Follow the same approach as `esl-common`:
+
+- Add `.golangci.yml` (v2 format) with: `errcheck`, `gosec`, `staticcheck`, `ineffassign`, and `gofumpt` formatter
+- Makefile with `GOLANGCI_LINT_VERSION` variable, `install-lint` target (pinned version, auto-install), and `lint` target depending on `install-lint`
+- `make lint` must pass with 0 issues
 
 ## Verification
 

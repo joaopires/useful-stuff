@@ -1,36 +1,31 @@
-# Plan: phase2-cdc-shared-package
+# Plan: phase2-cdc-shared-package ✅
 
-**Scope:** New `esl-go-commons` repository
+**Status:** Complete — v0.1.0 released 2026-03-25
+**Scope:** `esl-common` repository (`github.com/sonaemc-instore/lac1041-instoreorchestrator_esl-common`)
 **Depends on:** Nothing (first to implement)
 
-Shared Go package imported by both datapipeline and event-publisher:
+Shared Go module (`esl-common`) imported by both datapipeline and event-publisher.
+
+### Packages
+
+**`event/`** — CDC event types:
+- `ChangeType` — string enum (`CREATED`, `MODIFIED`)
+- `ChangeEvent` — struct with `event_type`, `entity_type`, `entity_key`, `payload`, `occurred_at`
+
+**`entity/`** — Entity type enum and key definitions:
+- `EntityType` — string enum (`Store`, `Product`, `Label`, `AccessPoint`)
+- `ConflictKeys` — maps `EntityType` to composite business key columns
+
+### Import path
 
 ```go
-// outbox/types.go
-type ChangeType string
-const (
-    ChangeTypeCreated  ChangeType = "CREATED"
-    ChangeTypeModified ChangeType = "MODIFIED"
+import (
+    "github.com/sonaemc-instore/lac1041-instoreorchestrator_esl-common/event"
+    "github.com/sonaemc-instore/lac1041-instoreorchestrator_esl-common/entity"
 )
-
-type ChangeEvent struct {
-    EventType  ChangeType         `json:"event_type"`
-    EntityType string             `json:"entity_type"`
-    EntityKey  map[string]string  `json:"entity_key"`
-    Payload    map[string]any     `json:"payload"`
-    OccurredAt time.Time          `json:"occurred_at"`
-}
-
-// entities/keys.go
-var EntityConflictKeys = map[string][]string{
-    "store":       {"retail_chain_id", "store_id"},
-    "product":     {"retail_chain_id", "store_id", "item_id"},
-    "label":       {"store_id", "retail_chain_id", "label_id"},
-    "accesspoint": {"retail_chain_id", "store_id", "id"},
-}
 ```
 
 ## Verification
 
 - `go build ./...`
-- Unit tests for type serialization
+- Unit tests for type serialization (`event/types_test.go`, `entity/keys_test.go`)
