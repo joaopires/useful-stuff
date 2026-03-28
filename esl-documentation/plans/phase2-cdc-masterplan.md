@@ -57,12 +57,12 @@ Connector → Transformer → Sink ──┐
 2. database migrations ──────┘                │
                                               ├──→ 4. datapipeline CDC ──┐
                                               │                          │
-                                              │    5. event-publisher ───┤
+                              5. go-solace-sdk ├──→ 6. event-publisher ──┤
                                               │                          │
-                                              └──→ 6. DOCS: datapipeline ┤
-                                                   7. DOCS: event-pub ───┤
-                                                                         ├──→ 9. DOCS: deployment + ops
-                                                   8. k8s helm ──────────┘
+                                              └──→ 7. DOCS: datapipeline ┤
+                                                   8. DOCS: event-pub ───┤
+                                                                         ├──→ 10. DOCS: deployment + ops
+                                                   9. k8s helm ──────────┘
 ```
 
 ### Status
@@ -73,11 +73,12 @@ Connector → Transformer → Sink ──┐
 | 2 | database migrations (outbox) | Done |
 | 3 | DOCS: introduction, architecture, database | Done |
 | 4 | datapipeline CDC | In progress (planning) |
-| 5 | event-publisher | Not started |
-| 6 | DOCS: data pipeline (CDC additions) | Not started |
-| 7 | DOCS: event publisher | Not started |
-| 8 | k8s helm | Not started |
-| 9 | DOCS: deployment, operations | Not started |
+| 5 | go-solace-sdk (Solace Go client library) | In progress (Phase 3 done, Phase 4 next) |
+| 6 | event-publisher | Not started |
+| 7 | DOCS: data pipeline (CDC additions) | Not started |
+| 8 | DOCS: event publisher | Not started |
+| 9 | k8s helm | Not started |
+| 10 | DOCS: deployment, operations | Not started |
 
 ## Documentation
 
@@ -95,6 +96,7 @@ Documentation should be written incrementally — each completed scoped plan pro
 |---|---|
 | shared-package + database | Introduction, Architecture overview, Database |
 | datapipeline CDC | Data Pipeline (CDC additions) |
+| go-solace-sdk | N/A (standalone repo, own README) |
 | event-publisher | Event Publisher (new section) |
 | k8s-helm | Deployment, Operations |
 
@@ -103,5 +105,6 @@ Documentation should be written incrementally — each completed scoped plan pro
 - [phase2-cdc-shared-package.md](phase2-cdc-shared-package.md) — esl-go-commons repo
 - [phase2-cdc-database.md](phase2-cdc-database.md) — Flyway migrations for outbox table
 - [phase2-cdc-datapipeline.md](phase2-cdc-datapipeline.md) — CDC detection in the sink
+- [go-solace-sdk-implementation.md](/Users/joaopires/Projects/sonae/esl/plans/go-solace-sdk-implementation.md) — Solace Go client library (separate repo)
 - [phase2-cdc-event-publisher.md](phase2-cdc-event-publisher.md) — New publisher service
 - [phase2-cdc-k8s-helm.md](phase2-cdc-k8s-helm.md) — Helm chart changes
