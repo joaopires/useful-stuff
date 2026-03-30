@@ -73,7 +73,7 @@ Connector → Transformer → Sink ──┐
 | 2 | database migrations (outbox) | Done |
 | 3 | DOCS: introduction, architecture, database | Done |
 | 4 | datapipeline CDC | In progress (planning) |
-| 5 | go-solace-sdk (Solace Go client library) | In progress (Phase 3 done, Phase 4 next) |
+| 5 | go-solace-sdk (Solace Go client library) | In progress (Phase 4 done — producer implemented, Phase 6a next; consumer phases 5/6b deferred to Phase 3) |
 | 6 | event-publisher | Not started |
 | 7 | DOCS: data pipeline (CDC additions) | Not started |
 | 8 | DOCS: event publisher | Not started |
