@@ -73,7 +73,7 @@ Connector → Transformer → Sink ──┐
 | 2 | database migrations (outbox) | Done |
 | 3 | DOCS: introduction, architecture, database | Done |
 | 4 | datapipeline CDC | In progress (planning) |
-| 5 | go-solace-sdk (Solace Go client library) | In progress (Phase 4 done — producer implemented, Phase 6a next; consumer phases 5/6b deferred to Phase 3) |
+| 5 | go-solace-sdk (Solace Go client library) | Done (Phases 1-4 + 6a complete — connection, telemetry, producer, integration tests, README; consumer phases 5/6b deferred to ESL Phase 3) |
 | 6 | event-publisher | Not started |
 | 7 | DOCS: data pipeline (CDC additions) | Not started |
 | 8 | DOCS: event publisher | Not started |
@@ -99,6 +99,21 @@ Documentation should be written incrementally — each completed scoped plan pro
 | go-solace-sdk | N/A (standalone repo, own README) |
 | event-publisher | Event Publisher (new section) |
 | k8s-helm | Deployment, Operations |
+
+## Conventions
+
+- **Integration tests use `TestMain`**: When integration tests share an expensive resource (e.g. a Testcontainers container), use `TestMain(m *testing.M)` for setup/teardown and a package-level variable to hold the shared resource. Each test must be an independent top-level `TestXxx` function, not a subtest under a parent. This ensures output streams in real time and tests can be run individually.
+
+## Repositories
+
+| Component | Local Path |
+|-----------|------------|
+| esl-go-commons | `/Users/joaopires/Projects/sonae/esl/common` |
+| database | `/Users/joaopires/Projects/sonae/esl/database` |
+| datapipeline | `/Users/joaopires/Projects/sonae/esl/datapipeline` |
+| go-solace-sdk | `/Users/joaopires/Projects/sonae/esl/go-solace-sdk` |
+| event-publisher | `/Users/joaopires/Projects/sonae/esl/event-publisher` |
+| k8s helm | `/Users/joaopires/Projects/sonae/esl/k8s` |
 
 ## Scoped Plans
 
