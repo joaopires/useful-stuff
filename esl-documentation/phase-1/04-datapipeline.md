@@ -59,7 +59,7 @@ Validates configuration syntax and structure without executing the pipeline.
 eslorchestrator validate config.yaml
 ```
 
-Outputs pipeline metadata on success: name, transform type, sink type, worker count, buffer size, and telemetry status.
+Outputs pipeline metadata on success: name, sink type, worker count, buffer size, and telemetry status.
 
 ### version
 
@@ -227,7 +227,7 @@ pipeline:
   name: "esl-orchestrator"          # Required — pipeline identifier
   description: "ESL sync pipeline"  # Optional
   performance:
-    worker_count: 10                # Concurrent transform workers
+    worker_count: 10                # Concurrent workers for record processing
     buffer_size: 1000               # Channel buffer capacity
 ```
 
@@ -260,13 +260,6 @@ connector:
         password: "..."
         schema: "esl"
         ssl_mode: "disable"
-```
-
-### Transform
-
-```yaml
-transform:
-  type: "normalizer"                # "normalizer" or "passthrough"
 ```
 
 ### Sink
