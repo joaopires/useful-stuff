@@ -2,7 +2,7 @@
 
 ## Context
 
-Phase 1 established a data pipeline that syncs ESL data from Vusion APIs into PostgreSQL via batched upserts. Phase 2 adds Change Data Capture: detecting CREATED and MODIFIED records during each pipeline execution and publishing events to Solace with guaranteed delivery and no duplications. DELETED events deferred to a later iteration.
+Phase 1 established a data pipeline that syncs ESL data from Vusion APIs into PostgreSQL via batched upserts. Phase 2 adds Change Data Capture: detecting CREATED and UPDATED records during each pipeline execution and publishing events to Solace with guaranteed delivery and no duplications. The DELETED change type is defined in esl-common but not implemented in Phase 2 — deferred to a later iteration.
 
 ## Architecture
 
@@ -37,7 +37,7 @@ Connector → Transformer → Sink ──┐
 |----------|--------|-----------|
 | Change detection | Pre-fetch + in-Go classification | Diff payloads require old values → pre-fetch mandatory → classification is free |
 | Delivery guarantee | Transactional outbox pattern | Atomic with upsert, decoupled publisher, no dual-write problem |
-| Event payload | Diff (CREATED=full snapshot, MODIFIED=changed fields only) | User preference |
+| Event payload | Diff (CREATED=full snapshot, UPDATED=changed fields only) | User preference |
 | `last_updated_at` | Unchanged behavior (always refreshes) | Internal audit only, no query changes needed |
 | Repo layout | Separate repo + shared `esl-go-commons` package | Follows one-repo-per-component pattern, clean SRP |
 | Solace topics | `esl/events/{entity_type}` | Event type in payload, not topic. Schema TBD |

@@ -30,6 +30,8 @@ The outbox row (`event.ChangeEvent`) is transformed into a flat published event 
 
 The resulting event is a flat JSON object matching the client-provided schemas (Store, Product, Label, AccessPoint). The `EventType` and `EntityType` fields from the outbox row are not included in the published event — `EntityType` is used for topic routing (`esl/events/{entity_type}`).
 
+**Note:** Only `CREATED` and `UPDATED` events are handled in Phase 2. The `DELETED` change type exists in esl-common but the event-publisher should ignore it (skip or log a warning) until a later iteration implements delete detection.
+
 ## Components
 
 - `cmd/eventpublisher/main.go` — CLI entry, signal handling, graceful shutdown

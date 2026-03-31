@@ -9,7 +9,7 @@ Shared Go module (`esl-common`) imported by both datapipeline and event-publishe
 ### Packages
 
 **`event/`** — CDC event types:
-- `ChangeType` — string enum (`CREATED`, `MODIFIED`)
+- `ChangeType` — string enum (`CREATED`, `UPDATED`, `DELETED`). DELETED is defined but not implemented in Phase 2.
 - `ChangeEvent` — struct with `event_type`, `entity_type`, `entity_key`, `payload`, `occurred_at`
 
 **`entity/`** — Entity type enum and key definitions:
