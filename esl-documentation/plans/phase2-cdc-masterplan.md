@@ -26,8 +26,9 @@ Connector → Transformer → Sink ──┐
                      └───────────────────────┘
 
 [Shared Go Package: esl-go-commons]
-  - Used by: datapipeline, event-publisher
-  - Contains: outbox types, entity key definitions
+  - Used by: datapipeline, event-publisher, datafetch
+  - Contains: outbox types, entity key definitions,
+              postgres pool config + creation, error classification
 ```
 
 ## Key Decisions (resolved)
@@ -55,7 +56,8 @@ Connector → Transformer → Sink ──┐
 1. esl-go-commons ──────────┐
                               ├──→ 3. DOCS: intro + architecture + database
 2. database migrations ──────┘                │
-                                              ├──→ 4. datapipeline CDC ──┐
+                                              │
+               1b. esl-go-commons: postgres ──┼──→ 4. datapipeline CDC ──┐
                                               │                          │
                               5. go-solace-sdk ├──→ 6. event-publisher ──┤
                                               │                          │
@@ -70,6 +72,7 @@ Connector → Transformer → Sink ──┐
 | # | Step | Status |
 |---|------|--------|
 | 1 | esl-go-commons (shared package) | Done |
+| 1b | esl-go-commons: postgres package (pool + error classification) | Done |
 | 2 | database migrations (outbox) | Done |
 | 3 | DOCS: introduction, architecture, database | Done |
 | 4 | datapipeline CDC | In progress (planning) |
@@ -117,7 +120,8 @@ Documentation should be written incrementally — each completed scoped plan pro
 
 ## Scoped Plans
 
-- [phase2-cdc-shared-package.md](phase2-cdc-shared-package.md) — esl-go-commons repo
+- [phase2-cdc-shared-package.md](phase2-cdc-shared-package.md) — esl-go-commons repo (entity types, event types)
+- [phase2-cdc-postgres-package.md](phase2-cdc-postgres-package.md) — esl-go-commons postgres package (pool config, error classification)
 - [phase2-cdc-database.md](phase2-cdc-database.md) — Flyway migrations for outbox table
 - [phase2-cdc-datapipeline.md](phase2-cdc-datapipeline.md) — CDC detection in the sink
 - [go-solace-sdk-implementation.md](/Users/joaopires/Projects/sonae/esl/plans/go-solace-sdk-implementation.md) — Solace Go client library (separate repo)

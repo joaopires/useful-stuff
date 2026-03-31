@@ -1,7 +1,7 @@
 # Plan: phase2-cdc-event-publisher
 
 **Scope:** New `event-publisher` repository
-**Depends on:** shared package, database migrations
+**Depends on:** shared package (esl-common latest commit on main — includes `entity`, `event`, and `postgres` packages), database migrations
 
 ## Architecture
 
@@ -19,6 +19,17 @@ Poll (1s interval) → SELECT undelivered events (FOR UPDATE SKIP LOCKED)
 
 **Note:** Use `entity.EntityType` from esl-common when reading `entity_type` from the outbox table and when building Solace topic names. This provides compile-time safety and consistency with the datapipeline.
 
+## Event transformation
+
+The outbox row (`event.ChangeEvent`) is transformed into a flat published event before sending to Solace:
+
+1. Generate `eventId` (UUID v4)
+2. Merge `EntityKey` fields as top-level keys (e.g. `retail_chain_id`, `store_id`, `item_id`)
+3. Merge `Payload` fields as top-level keys (all entity-specific data)
+4. Set `send_date` to current time (ISO 8601)
+
+The resulting event is a flat JSON object matching the client-provided schemas (Store, Product, Label, AccessPoint). The `EventType` and `EntityType` fields from the outbox row are not included in the published event — `EntityType` is used for topic routing (`esl/events/{entity_type}`).
+
 ## Components
 
 - `cmd/eventpublisher/main.go` — CLI entry, signal handling, graceful shutdown
@@ -26,6 +37,10 @@ Poll (1s interval) → SELECT undelivered events (FOR UPDATE SKIP LOCKED)
 - `internal/publisher/config.go` — config (poll interval, batch size, DB, Solace)
 - `internal/solace/client.go` — Solace client wrapper (persistent messaging)
 - `internal/health/health.go` — `/health` and `/ready` endpoints
+
+## Database connection
+
+Use `postgres.PoolConfig` and `postgres.NewPool` from esl-common for pool creation. The service maps its own YAML config to `postgres.PoolConfig`. Use `postgres.ClassifyError` and `postgres.IsTransient` for error handling and retry decisions.
 
 ## Config structure
 
@@ -53,3 +68,9 @@ Follow the same approach as `esl-common`:
 - **Unit tests:** polling logic with mock DB, Solace publish mock
 - **Integration tests (testcontainers):** insert outbox rows → publisher picks up → marks delivered
 - Health endpoint responds correctly when DB/Solace connected vs disconnected
+
+---
+
+## Post-implementation note
+
+After the event-publisher implementation is complete and the esl-common code has been validated in practice, check whether a new esl-common tag (e.g. `v0.2.0`) should be created and referenced in `go.mod` instead of a commit hash.

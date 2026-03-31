@@ -1,7 +1,7 @@
 # Plan: phase2-cdc-datapipeline
 
 **Scope:** `datapipeline` project — CDC detection in the sink
-**Depends on:** shared package (esl-common v0.1.0), database migrations (V1.0.0.15–17)
+**Depends on:** shared package (esl-common latest commit on main), database migrations (V1.0.0.15–17)
 **Status:** Implementation not started
 
 ## Prerequisite tasks
@@ -24,6 +24,13 @@ The datapipeline repo has a `Makefile` with a `lint` target but no `.golangci.ym
 - Add `GOLANGCI_LINT_VERSION` variable and `install-lint` target to the Makefile (pinned version, auto-install via curl if not present)
 - Update the existing `lint` target to depend on `install-lint` and use `--config=.golangci.yml`
 - Verify `make lint` passes with 0 issues (fix any findings as part of this work)
+
+### Refactor: adopt `postgres` package from esl-common
+
+esl-common now provides a `postgres` package with shared pool creation and error classification. As part of adopting the updated esl-common dependency:
+
+- **Pool creation** — replace duplicated `pgxpool` setup in the sink builder and state store with `postgres.NewPool`. Each service maps its own config format to `postgres.PoolConfig`.
+- **Error classification** — refactor `internal/sink/postgres/errors.go` (`classifyError`) to delegate to `postgres.ClassifyError` and `postgres.IsTransient`. App-specific behavior (failed record storage, batch error joining, `records_with_errors` table writes) stays in the datapipeline.
 
 ---
 
@@ -504,3 +511,9 @@ Batch sizes: 10, 50, 100, 500. Report ns/op and allocs.
 5. `go test ./... -short` — full project (no regressions)
 6. Review `docs/postgres-sink.md` diff for completeness
 7. Verify `config-docker-test.yaml` loads correctly with CDC enabled
+
+---
+
+## Post-implementation note
+
+After the datapipeline implementation is complete and the esl-common code has been validated in practice, check whether a new esl-common tag (e.g. `v0.2.0`) should be created and referenced in `go.mod` instead of a commit hash.
