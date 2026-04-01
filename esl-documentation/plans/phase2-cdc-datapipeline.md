@@ -2,7 +2,7 @@
 
 **Scope:** `datapipeline` project — CDC detection in the sink
 **Depends on:** shared package (esl-common latest commit on main), database migrations (V1.0.0.15–17)
-**Status:** Implementation not started
+**Status:** Prerequisites in progress (1 of 3 done)
 
 ## Prerequisite tasks
 
@@ -16,14 +16,12 @@ The datapipeline currently uses hardcoded `"store"`, `"product"`, `"label"`, `"a
 
 This ensures type safety and a single source of truth for entity type values across both datapipeline and event-publisher.
 
-### Code quality: add golangci-lint config
+### ~~Code quality: add golangci-lint config~~ ✅ DONE (2026-03-31, commit a62bdd4)
 
-The datapipeline repo has a `Makefile` with a `lint` target but no `.golangci.yml`, and the lint tooling install uses no pinned version. Align with the approach in `esl-common`:
-
-- Add `.golangci.yml` (v2 format) with: `errcheck`, `gosec`, `staticcheck`, `ineffassign`, and `gofumpt` formatter
-- Add `GOLANGCI_LINT_VERSION` variable and `install-lint` target to the Makefile (pinned version, auto-install via curl if not present)
-- Update the existing `lint` target to depend on `install-lint` and use `--config=.golangci.yml`
-- Verify `make lint` passes with 0 issues (fix any findings as part of this work)
+- Added `.golangci.yml` (v2 format) with: `errcheck`, `gosec`, `staticcheck`, `ineffassign`, and `gofumpt` formatter
+- Added `GOLANGCI_LINT_VERSION=v2.8.0` variable and `install-lint` target to the Makefile
+- Updated `lint` target to depend on `install-lint` and use `--config=.golangci.yml`
+- Fixed 59 lint findings across 47 files, `make lint` passes with 0 issues
 
 ### Refactor: adopt `postgres` package from esl-common
 
@@ -31,6 +29,14 @@ esl-common now provides a `postgres` package with shared pool creation and error
 
 - **Pool creation** — replace duplicated `pgxpool` setup in the sink builder and state store with `postgres.NewPool`. Each service maps its own config format to `postgres.PoolConfig`.
 - **Error classification** — refactor `internal/sink/postgres/errors.go` (`classifyError`) to delegate to `postgres.ClassifyError` and `postgres.IsTransient`. App-specific behavior (failed record storage, batch error joining, `records_with_errors` table writes) stays in the datapipeline.
+- **Fix `classifyJoined` retry logic** — the current implementation treats any unclassified error as transient (if not all errors are permanent, the joined error is wrapped as transient). This causes unrecognized PG errors (e.g. `42703` — undefined column) to burn through retries with backoff instead of failing fast. Replace with: retry only when `postgres.IsTransient` returns true; unclassified errors should not be retried.
+
+### Fix integration test table schemas
+
+The shared `createTestTable` helper in `postgres_integration_test.go` creates tables without the `last_updated_at` column, but `query.go` hardcodes `"last_updated_at" = NOW()` in the upsert ON CONFLICT clause. PostgreSQL validates the full statement at parse time, so even non-conflicting INSERTs fail with `42703`. Combined with the `classifyJoined` bug above, this makes every test that uses `createTestTable` retry to exhaustion (~7s per test, ~140s for ConnectionPool).
+
+- Add `last_updated_at TIMESTAMP` to `createTestTable` helper
+- Add the same column to custom table creation in `TestPostgresSink_Integration_BatchContinuesAfterPartialFailure`
 
 ---
 

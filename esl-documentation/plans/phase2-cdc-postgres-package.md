@@ -61,11 +61,15 @@ Exported sentinel errors for common PostgreSQL error codes:
 ```go
 // Permanent errors — will not succeed on retry.
 var (
-    ErrUniqueViolation    = errors.New("unique constraint violation")     // 23505
-    ErrNotNullViolation   = errors.New("not null constraint violation")   // 23502
-    ErrForeignKeyViolation = errors.New("foreign key violation")          // 23503
-    ErrCheckViolation     = errors.New("check constraint violation")      // 23514
-    ErrSyntaxError        = errors.New("syntax error")                    // 42601
+    ErrUniqueViolation     = errors.New("unique constraint violation")     // 23505
+    ErrNotNullViolation    = errors.New("not null constraint violation")   // 23502
+    ErrForeignKeyViolation = errors.New("foreign key violation")           // 23503
+    ErrCheckViolation      = errors.New("check constraint violation")      // 23514
+    ErrSyntaxError         = errors.New("syntax error")                    // 42601
+    ErrUndefinedColumn     = errors.New("undefined column")                // 42703
+    ErrUndefinedTable      = errors.New("undefined table")                 // 42P01
+    ErrDuplicateTable      = errors.New("duplicate table")                 // 42P07
+    ErrDuplicateObject     = errors.New("duplicate object")                // 42710
 )
 
 // Transient errors — may succeed on retry.
@@ -154,10 +158,11 @@ Each service maps its own config format to `PoolConfig` and calls `NewPool`:
 **`errors_test.go`:**
 - `TestClassifyError_UniqueViolation` — 23505 → `ErrUniqueViolation`
 - `TestClassifyError_Deadlock` — 40P01 → `ErrDeadlock`
+- `TestClassifyError_SchemaErrors` — 42703 → `ErrUndefinedColumn`, 42P01 → `ErrUndefinedTable`
 - `TestClassifyError_NonPgError` — returns original error unchanged
 - `TestIsTransient_PgErrors` — deadlock/serialization/shutdown → true
 - `TestIsTransient_NetworkError` — `net.Error` → true
-- `TestIsTransient_PermanentErrors` — constraint violations → false
+- `TestIsTransient_PermanentErrors` — constraint violations, schema errors → false
 - `TestPgErrorCode` — extracts code, returns empty for non-PgError
 
 ### Integration tests (`pool_test.go`)
