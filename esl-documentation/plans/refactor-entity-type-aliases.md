@@ -2,7 +2,7 @@
 
 **Scope:** esl-common type aliases + datapipeline adoption of `entity.EntityType` constants
 **Depends on:** esl-common shared package (already done)
-**Status:** Not started
+**Status:** Part A done (1fb96e8) — Part B not started
 
 ## Context
 
