@@ -59,14 +59,16 @@ Connector → Transformer → Sink ──┐
                               ├──→ 3. DOCS: intro + architecture + database
 2. database migrations ──────┘                │
                                               │
-               1b. esl-go-commons: postgres ──┼──→ 4. datapipeline CDC ──┐
-                                              │                          │
-                              5. go-solace-sdk ├──→ 6. event-publisher ──┤
-                                              │                          │
-                                              └──→ 7. DOCS: datapipeline ┤
-                                                   8. DOCS: event-pub ───┤
-                                                                         ├──→ 10. DOCS: deployment + ops
-                                                   9. k8s helm ──────────┘
+               1b. esl-go-commons: postgres ──┼──→ 4a. entity type aliases ──┐
+                                              │                               ├──→ 4c. datapipeline CDC ──┐
+                                              │    4b. adopt common postgres ─┘                            │
+                                              │                                                            │
+                              5. go-solace-sdk ├──→ 6. event-publisher ────────────────────────────────────┤
+                                              │                                                            │
+                                              └──→ 7. DOCS: datapipeline ─────────────────────────────────┤
+                                                   8. DOCS: event-pub ────────────────────────────────────┤
+                                                                                                           ├──→ 10. DOCS: deployment + ops
+                                                   9. k8s helm ───────────────────────────────────────────┘
 ```
 
 ### Status
@@ -77,7 +79,9 @@ Connector → Transformer → Sink ──┐
 | 1b | esl-go-commons: postgres package (pool + error classification) | Done |
 | 2 | database migrations (outbox) | Done |
 | 3 | DOCS: introduction, architecture, database | Done |
-| 4 | datapipeline CDC | In progress (planning) |
+| 4a | datapipeline: replace entity strings with esl-common constants | Not started |
+| 4b | datapipeline: adopt esl-common postgres package | Not started |
+| 4c | datapipeline CDC | Not started (blocked on 4a, 4b) |
 | 5 | go-solace-sdk (Solace Go client library) | Done (Phases 1-4 + 6a complete — connection, telemetry, producer, integration tests, README; consumer phases 5/6b deferred to ESL Phase 3) |
 | 5b | database migration: add `status` column to outbox | Not started |
 | 6 | event-publisher | Not started |
@@ -126,6 +130,8 @@ Documentation should be written incrementally — each completed scoped plan pro
 - [phase2-cdc-shared-package.md](phase2-cdc-shared-package.md) — esl-go-commons repo (entity types, event types)
 - [phase2-cdc-postgres-package.md](phase2-cdc-postgres-package.md) — esl-go-commons postgres package (pool config, error classification)
 - [phase2-cdc-database.md](phase2-cdc-database.md) — Flyway migrations for outbox table
+- [refactor-entity-type-aliases.md](refactor-entity-type-aliases.md) — esl-common type aliases + datapipeline entity constant adoption
+- [refactor-adopt-common-postgres.md](refactor-adopt-common-postgres.md) — datapipeline: adopt esl-common postgres package (pool + errors + test fix)
 - [phase2-cdc-datapipeline.md](phase2-cdc-datapipeline.md) — CDC detection in the sink
 - [go-solace-sdk-implementation.md](/Users/joaopires/Projects/sonae/esl/plans/go-solace-sdk-implementation.md) — Solace Go client library (separate repo)
 - [phase2-cdc-event-publisher.md](phase2-cdc-event-publisher.md) — New publisher service
