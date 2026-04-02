@@ -43,6 +43,8 @@ Connector → Transformer → Sink ──┐
 | Solace topics | `esl/events/{entity_type}` | Event type in payload, not topic. Schema TBD |
 | Feature flag | `cdc.enabled` in sink config | Safe rollout, existing behavior preserved when off |
 | Comparison scope | All non-PK, non-audit columns | `created_at`/`last_updated_at` excluded; source `modification_date` included |
+| Outbox status tracking | Explicit `status` column (`PENDING`, `DELIVERED`, `FAILED`) | Enables failure tracking and observability; `delivered_at` kept for timestamp |
+| Outbox consumption | Polling (`FOR UPDATE SKIP LOCKED`) over WAL logical replication | Simpler ops (no `wal_level=logical`, no replication slots, no WAL bloat risk), sufficient latency (1s), free observability via `status` column; WAL streaming better suited for high-throughput/low-latency scenarios |
 
 ## Open Questions
 
@@ -77,6 +79,7 @@ Connector → Transformer → Sink ──┐
 | 3 | DOCS: introduction, architecture, database | Done |
 | 4 | datapipeline CDC | In progress (planning) |
 | 5 | go-solace-sdk (Solace Go client library) | Done (Phases 1-4 + 6a complete — connection, telemetry, producer, integration tests, README; consumer phases 5/6b deferred to ESL Phase 3) |
+| 5b | database migration: add `status` column to outbox | Not started |
 | 6 | event-publisher | Not started |
 | 7 | DOCS: data pipeline (CDC additions) | Not started |
 | 8 | DOCS: event publisher | Not started |
@@ -100,7 +103,7 @@ Documentation should be written incrementally — each completed scoped plan pro
 | shared-package + database | Introduction, Architecture overview, Database |
 | datapipeline CDC | Data Pipeline (CDC additions) |
 | go-solace-sdk | N/A (standalone repo, own README) |
-| event-publisher | Event Publisher (new section) |
+| event-publisher | Event Publisher (new section) — include a decision rationale subsection explaining polling vs WAL streaming trade-offs and why polling was chosen |
 | k8s-helm | Deployment, Operations |
 
 ## Conventions

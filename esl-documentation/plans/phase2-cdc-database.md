@@ -12,6 +12,7 @@ CREATE TABLE esl.event_outbox (
     entity_type     VARCHAR(50)  NOT NULL,
     entity_key      JSONB        NOT NULL,
     payload         JSONB        NOT NULL,
+    status          VARCHAR(10)  NOT NULL DEFAULT 'PENDING',
     occurred_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     delivered_at    TIMESTAMPTZ
 );
@@ -21,10 +22,13 @@ CREATE TABLE esl.event_outbox (
 
 ```sql
 CREATE INDEX idx_event_outbox_pending
-    ON esl.event_outbox (occurred_at) WHERE delivered_at IS NULL;
+    ON esl.event_outbox (occurred_at) WHERE status = 'PENDING';
 
 CREATE INDEX idx_event_outbox_delivered
-    ON esl.event_outbox (delivered_at) WHERE delivered_at IS NOT NULL;
+    ON esl.event_outbox (delivered_at) WHERE status = 'DELIVERED';
+
+CREATE INDEX idx_event_outbox_failed
+    ON esl.event_outbox (occurred_at) WHERE status = 'FAILED';
 ```
 
 ## Migration: V1.0.0.17__event_outbox_retention.sql
@@ -37,8 +41,8 @@ RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE deleted BIGINT;
 BEGIN
     DELETE FROM esl.event_outbox
-    WHERE delivered_at IS NOT NULL
-      AND delivered_at < NOW() - (retention_days || ' days')::INTERVAL;
+    WHERE status IN ('DELIVERED', 'FAILED')
+      AND COALESCE(delivered_at, occurred_at) < NOW() - (retention_days || ' days')::INTERVAL;
     GET DIAGNOSTICS deleted = ROW_COUNT;
     RETURN deleted;
 END; $$;

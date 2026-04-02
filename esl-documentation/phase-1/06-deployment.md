@@ -94,7 +94,7 @@ clusters/
 | Memory request / limit | 512Mi / 1Gi |
 | Concurrency policy | Forbid (no overlapping runs) |
 | Backoff limit | 3 |
-| TTL after finished | 600s |
+| Timezone | Configurable (default: `Europe/Lisbon`) |
 | History (success/fail) | 2 / 2 |
 
 ### Database Migrations (PreSync Job)
@@ -140,14 +140,14 @@ Secrets are managed by the **External Secrets Operator**, which synchronises cre
 
 ### Vault Paths
 
-All secrets are stored under the `instore/instore-orchestrator/` Vault path:
+Vault paths are parameterised via `vaultBasePath` in the Helm values file (e.g., `instore/instore-orchestrator_esl`). All templates reference this value rather than hardcoding the path:
 
 | Secret Group | Vault Path | Contents |
 |---|---|---|
-| Database | `instore/instore-orchestrator/database` | DB host, port, username, password, database name, schema |
-| Flyway | `instore/instore-orchestrator/database` | Flyway user, password, schemas, host, port, database |
-| Connectors | `instore/instore-orchestrator/application` | Vusion Manager and VLink API credentials (URLs, keys) |
-| TLS | `security/certificate/instore/instore-orchestrator` | Ingress TLS certificate and key |
+| Database | `{vaultBasePath}/database` | DB host, port, username, password, database name, schema |
+| Flyway | `{vaultBasePath}/database` | Flyway user, password, schemas, host, port, database |
+| Connectors | `{vaultBasePath}/application` | Vusion Manager and VLink API credentials (URLs, keys) |
+| TLS | `security/certificate/{vaultBasePath}` | DataFetch TLS certificate and key |
 
 Each environment uses environment-specific property names within the same Vault paths (e.g., `instore_orchestrator_esl_pp_db_username` for preproduction).
 
@@ -189,7 +189,7 @@ Preproduction connects to three PostgreSQL replicas:
 - `10.50.136.7/32` (port 10200)
 - `10.49.136.10/32` (port 10200)
 
-Development and production use placeholder IPs (`10.0.0.1/32`) pending final infrastructure provisioning.
+Development uses placeholder IPs (`10.0.0.1/32`) pending provisioning. Production connects to six PostgreSQL nodes (three active, three provisioned for future use) on port 10200.
 
 ## Ingress
 
@@ -209,14 +209,16 @@ The DataFetch API is exposed via a Traefik ingress with TLS termination:
 
 | Setting | Development | Preproduction | Production |
 |---|---|---|---|
-| **Namespace** | `instore-esl-orchestrator-dev` | `instore-esl-orchestrator-pp` | `instore-esl-orchestrator-prd` |
-| **Pipeline schedule** | `0 3 * * *` (3:00 AM) | `45 16 * * *` (16:45 UTC) | `0 3 * * *` (3:00 AM) |
-| **Store filter** | All stores | 4 specific stores | All stores |
-| **DB port** | 5432 | 10200 | 5432 |
-| **Image tags** | Placeholder | Active | Placeholder |
-| **Secrets** | Placeholder | Configured | Placeholder |
+| **Namespace** | `instore-esl-orchestrator-dev` | `instore-esl-orchestrator-pp` | `instore-esl-orchestrator` |
+| **Pipeline schedule** | `0 3 * * *` (3:00) | `00 12 * * *` (12:00) | `00 19 * * *` (19:00) |
+| **Timezone** | `Europe/Lisbon` | `Europe/Lisbon` | `Europe/Lisbon` |
+| **Store filter** | All stores | 4 specific stores | 4 specific stores |
+| **DB port** | 5432 | 10200 | 10200 |
+| **DataFetch SSL** | Disabled | Enabled | Enabled |
+| **Image tags** | Placeholder | Active | Active |
+| **Secrets** | Placeholder | Configured | Configured |
 
-> **Note:** Development and production environments have placeholder values for image tags, secrets, and database CIDRs. These are populated when the environments are provisioned.
+> **Note:** The development environment has placeholder values for image tags, secrets, and database CIDRs. These are populated when the environment is provisioned.
 
 ## Monitoring and Alerting
 

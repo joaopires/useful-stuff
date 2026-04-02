@@ -85,29 +85,34 @@ The Vusion connector implements a two-phase synchronisation strategy:
 
 ### Phase 2 — Per-Store Entity Fetching
 
-1. Load the latest successful sync state per store from the database
+1. Load the latest successful sync state per store from the database (batch query)
 2. Launch a worker pool (`store_concurrency`, default: 10) to process stores in parallel
 3. For each store, determine sync mode:
    - **Full sync** — no prior successful run exists → fetch all records
    - **Incremental sync** — prior run exists → fetch records modified since `synced_at - lookback_window`
 4. Fetch products, labels, and access points from VLink API
+   - Pages within each store are fetched **sequentially** (not concurrently) to avoid pagination data loss from Lucene index instability
+   - On store-level failure, the store is marked as cancelled; other stores continue processing
 
 ### External APIs
 
 **Vusion Manager** — store metadata:
 
-- Endpoint: `/stores/search`
-- Returns: store ID, retail chain, name, software settings, timestamps
+- Store search: `POST /stores/search` (JSON body with search expression and pagination)
+- Store details: `GET /stores/{storeId}` (includes transmitter data for access points)
+- Page size: 100
 - Auth: `Ocp-Apim-Subscription-Key` and `ApiKey` headers
 
 **VLink** — per-store entity data:
 
-- Endpoints:
-  - `/stores/{storeID}/products` (full sync)
-  - `/stores/{storeID}/products/modified-since?since={timestamp}` (incremental)
-  - `/stores/{storeID}/labels` and `/stores/{storeID}/labels/modified-since?since={timestamp}`
+- Products: `GET /stores/{storeId}/productLabelling/products`
+- Labels: `GET /stores/{storeId}/productLabelling/labels`
+- Incremental sync uses the same endpoints with a Lucene-style search parameter:
+  `?search=modificationDate:[{RFC3339_timestamp} TO *]&sort=-modificationDate`
+- Field selection via `includes` query parameter
 - Page size: 1000
 - Auth: same headers as Vusion Manager
+- Retry: exponential backoff (initial 500ms) on 429 and 5xx responses
 
 **Access points** are extracted directly from the store object (`transmissionSystems.highFrequency.transmitters`), not fetched via a separate API call.
 
@@ -133,11 +138,11 @@ Each entity type has a defined set of fields to extract:
 
 **Store** — 9 fields: `retail_chain_id`, `store_id`, `store_name`, `retail_chain_name`, `software_setting_file_name`, `software_setting_version`, `software_setting_last_update`, `creation_date`, `modification_date`
 
-**Product** — 45+ fields: core attributes (`item_id`, `name`, `description`, `brand`, `price`, `status`), matching data (`matching_count`, `matching_matched`, `matching_labels`), and 30+ custom fields (`custom_dept`, `custom_class`, `custom_status`, etc.)
+**Product** — 45+ fields: core attributes (`item_id`, `id`, `name`, `description`, `brand`, `price`, `status`, `references`), timestamps (`creation_date`, `modification_date`, `deletion_date`), matching data (`matching_count`, `matching_matched`, `matching_labels`), and 30+ custom fields (`custom_dept`, `custom_class`, `custom_status`, etc.)
 
-**Label** — 30+ fields: hardware info (`hardware_type_name`, `hardware_battery`), transmission history (`transmission_registration_date`, `transmission_last_successful_transmission_date`), matching details, and connectivity status
+**Label** — 30+ fields: hardware info (`hardware_type_name`, `hardware_battery`), transmission history (`transmission_registration_date`, `transmission_last_successful_transmission_date`), matching details, connectivity status, and billing data (`billing_activate_date`)
 
-**Access Point** — 12 fields: identifiers (`id`, `mac_address`, `serial_number`), status, channel, and connectivity data
+**Access Point** — 13 fields: identifiers (`id`, `mac_address`, `serial_number`), status, channel, timestamps (`creation_date`, `modification_date`), and connectivity data (`connectivity_status`, `connectivity_last_offline_date`, `connectivity_last_online_date`)
 
 ## Sink
 
@@ -196,21 +201,31 @@ Retry configuration:
 
 ## State Management
 
-The pipeline tracks synchronisation history in two database tables to enable per-store incremental sync decisions.
+The pipeline tracks synchronisation history in two database tables using an **append-only** model — each run inserts a new row rather than updating an existing one. Automatic retention triggers keep the last 20 rows per partition key.
 
 ### sync_state
 
-One row per pipeline run. Records aggregate metrics: total stores/products/labels/access points processed, duration, status, and error message.
+One row per pipeline run. Records aggregate metrics: total stores/products/labels/access points processed, duration, status, and error message. The pipeline description is also persisted.
+
+Run status is one of three values:
+
+| Status | Meaning |
+|---|---|
+| `success` | All stores completed successfully |
+| `failed` | Pipeline encountered a fatal error |
+| `cancelled` | Pipeline was interrupted (e.g., signal) |
 
 ### store_sync_state
 
-One row per store per run. Records per-store metrics and the `synced_at` timestamp — the pipeline start time (not finish time) — which is used as the incremental sync cutoff on the next run.
+One row per store per run, linked via `run_id`. Records per-store metrics and the `synced_at` timestamp — the pipeline start time (not finish time) — which is used as the incremental sync cutoff on the next run.
+
+Per-store status uses the same three values: `success`, `failed`, or `cancelled`. A store that errors during Phase 2 is marked `cancelled`; other stores continue processing.
 
 ### Sync Mode Decision
 
 For each store in a run:
 
-1. Query `store_sync_state` for the most recent **successful** run
+1. Batch-query `store_sync_state` for the most recent **successful** run per store
 2. If no successful run exists → **full sync**
 3. If a successful run exists → **incremental sync** with cutoff = `synced_at - lookback_window`
 
@@ -329,10 +344,13 @@ When telemetry is enabled, the pipeline emits OpenTelemetry spans via OTLP/gRPC:
 |---|---|---|
 | `pipeline.records.processed` | Counter | Successfully processed records |
 | `pipeline.records.failed` | Counter | Failed records |
-| `connector.records.read` | Counter | Records fetched from source |
-| `sink.records.written` | Counter | Records written to database |
+| `pipeline.processing.duration` | Histogram | Per-record processing duration (ms) |
 | `pipeline.run.duration` | Histogram | Total run duration (ms) |
+| `connector.records.read` | Counter | Records fetched from source |
+| `connector.errors` | Counter | Connector-level errors |
 | `connector.latency` | Histogram | API fetch latency (ms) |
+| `sink.records.written` | Counter | Records written to database |
+| `sink.errors` | Counter | Sink-level errors |
 | `sink.latency` | Histogram | Write latency (ms) |
 
 All metrics are prefixed with `eslorchestrator.` and include attributes for pipeline name, entity type, and error classification.

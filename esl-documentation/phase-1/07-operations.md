@@ -41,7 +41,7 @@ dataPipeline:
   schedule: "0 6 * * *"   # Every day at 06:00 UTC
 ```
 
-The schedule uses standard cron syntax. All times are in **UTC**.
+The schedule uses standard cron syntax. The CronJob timezone is configured via the `timeZone` field in the values file (currently `Europe/Lisbon` across all environments).
 
 **Examples:**
 

@@ -10,10 +10,11 @@ Long-running Go service deployed as K8s Deployment. Polls the outbox table and p
 ## Core loop
 
 ```
-Poll (1s interval) → SELECT undelivered events (FOR UPDATE SKIP LOCKED)
+Poll (1s interval) → SELECT WHERE status = 'PENDING' (FOR UPDATE SKIP LOCKED)
   → Validate entity_type against entity.EntityType enum
   → Publish each to Solace topic esl/events/{entity_type}
-  → UPDATE delivered_at = NOW() for published event IDs
+  → UPDATE status = 'DELIVERED', delivered_at = NOW() for published event IDs
+  → On permanent failure: UPDATE status = 'FAILED' (after max retries)
   → Commit transaction
 ```
 
