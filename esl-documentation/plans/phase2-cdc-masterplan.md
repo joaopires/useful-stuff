@@ -84,9 +84,9 @@ Connector → Transformer → Sink ──┐
 | 3 | DOCS: introduction, architecture, database | Done |
 | 4a | datapipeline: replace entity strings with esl-common constants | Done (2026-04-06, commit 42a6a7e) |
 | 4b | datapipeline: adopt esl-common postgres package | Done (2026-04-06, commit 2bae4c5) |
-| 4c | datapipeline CDC | Not started |
+| 4c | datapipeline CDC | Done (2026-04-06, commit 1704dd2 + timestamp fix 2c4bd21) |
 | 5 | go-solace-sdk (Solace Go client library) | Done (Phases 1-4 + 6a complete — connection, telemetry, producer, integration tests, README; consumer phases 5/6b deferred to ESL Phase 3) |
-| 5b | database migration: add `status` column to outbox | Not started |
+| 5b | database migration: add `status` column to outbox | Done (2026-04-06, commit 0fc580c) |
 | 6 | event-publisher | Not started |
 | 7 | DOCS: data pipeline (CDC additions) | Not started |
 | 8 | DOCS: event publisher | Not started |

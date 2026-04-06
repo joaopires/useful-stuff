@@ -642,7 +642,14 @@ Batch sizes: 10, 50, 100, 500. Report ns/op and allocs.
 
 ---
 
+## Known issues
+
+- **Timestamp format inconsistency in event payloads**: CDC event diffs show `"old"` values in Postgres TEXT format (`2024-10-04 08:31:38.879+00`) and `"new"` values in RFC3339 (`2024-10-04T08:31:38.879Z`). The comparison logic (`normalizeValue`) handles both correctly — no false diffs — but downstream consumers see mixed formats. Needs a broader timestamp standardization effort across the entire app (4 different formats in use). Plan to be created separately.
+
+- **CDC overhead at batch_size=500**: +51% (mixed) to +100% (all new) latency overhead. Acceptable for current workloads (~4s extra on a full 240k-record sync). Documented in `docs/postgres-sink.md`. If it becomes a bottleneck, consider lowering batch size to 200-300, chunking outbox INSERT, or using COPY.
+
 ## Follow-up tasks (post-CDC)
 
+- **Standardize timestamp formats**: Unify the 4 timestamp representations (RFC3339 no millis, ISO 8601 with millis, `time.Time`, Postgres TEXT) to ISO 8601 with fractional seconds everywhere. Fixes the event payload inconsistency above. Requires its own plan.
 - **Remove YAML `ConflictKeys` duplication**: Have the upsert builder read from `entity.ConflictKeys` instead of `TableConfig.ConflictKeys`. Eliminates divergence risk and simplifies config.
 - **esl-common tag**: After CDC is validated in practice, create a new tag (e.g. `v0.2.0`) and update `go.mod` to reference it instead of a commit hash.
