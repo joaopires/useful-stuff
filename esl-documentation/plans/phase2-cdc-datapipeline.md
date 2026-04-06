@@ -116,7 +116,9 @@ func (c *CDC) WriteOutbox(
 
 #### Extracted reusable helpers (DRY)
 
-The upsert batch-building logic is currently inlined in `executeBatch`. Extract it so both CDC and non-CDC paths reuse it:
+Two pieces of logic are currently inlined in `executeBatch` and would be duplicated in the CDC path. Extract both so both paths reuse them:
+
+**`buildUpsertBatch`** — query preparation:
 
 ```go
 // buildUpsertBatch builds a pgx.Batch with upsert queries for all records.
@@ -125,6 +127,24 @@ func (s *PostgresSink) buildUpsertBatch(
     records []*models.Record,
 ) (*pgx.Batch, error)
 ```
+
+**`sendAndProcessBatch`** — batch result processing:
+
+The loop that calls `br.Exec()` per record, builds `recordFailure` structs, and handles errors is identical in both paths except for the error strategy: non-CDC collects all failures, CDC fails fast on the first error. Extract it with a `failFast` parameter:
+
+```go
+// sendAndProcessBatch sends a batch and processes results.
+// When failFast is true (CDC path), it returns on the first error with a
+// single recordFailure. When false (non-CDC path), it collects all failures.
+func (s *PostgresSink) sendAndProcessBatch(
+    ctx context.Context,
+    br pgx.BatchResults,
+    records []*models.Record,
+    failFast bool,
+) ([]recordFailure, error)
+```
+
+Both `executeBatch` and `executeBatchWithCDC` call this after obtaining `BatchResults` from their respective senders (`s.pool` vs `tx`). The only difference is the sender and the `failFast` flag — the result processing, `recordFailure` construction, and error classification are fully shared.
 
 #### Thin orchestrator (ISP, DIP)
 
@@ -140,9 +160,12 @@ func (s *PostgresSink) executeBatchWithCDC(ctx, records) ([]recordFailure, error
 
     events, _ := s.cdc.DetectChanges(ctx, tx, records, s.config.Tables)
 
-    batch, _ := s.buildUpsertBatch(records)     // DRY: shared with non-CDC
-    // ... send batch on tx, fail-fast on first error
-    // On error: return []recordFailure with 1 entry for the failing record
+    batch, _ := s.buildUpsertBatch(records)                        // DRY: shared
+    br := tx.SendBatch(ctx, batch)
+    failures, err := s.sendAndProcessBatch(ctx, br, records, true) // DRY: shared, failFast=true
+    if err != nil {
+        return failures, err
+    }
 
     if len(events) > 0 {
         s.cdc.WriteOutbox(ctx, tx, events)
@@ -357,7 +380,7 @@ func (c *CDC) WriteOutbox(ctx, tx, events) error {
 
 **File: `internal/sink/postgres/write_batch.go`**
 
-**Extract `buildUpsertBatch`** from `executeBatch` (DRY):
+**Extract `buildUpsertBatch`** from `executeBatch` (DRY — query preparation):
 
 ```go
 func (s *PostgresSink) buildUpsertBatch(records []*models.Record) (*pgx.Batch, error) {
@@ -373,7 +396,66 @@ func (s *PostgresSink) buildUpsertBatch(records []*models.Record) (*pgx.Batch, e
 }
 ```
 
-**Refactor `executeBatch`** to use `buildUpsertBatch` and dispatch CDC:
+**Extract `sendAndProcessBatch`** from `executeBatch` (DRY — result processing):
+
+Both paths iterate `br.Exec()` per record and build `recordFailure` on error. The only difference is the error strategy. This helper eliminates the duplication:
+
+```go
+// sendAndProcessBatch processes batch results from any sender (pool or tx).
+// When failFast is true, returns on the first error with a single failure.
+// When false, collects all failures and returns a joined error.
+func (s *PostgresSink) sendAndProcessBatch(
+    ctx context.Context,
+    br pgx.BatchResults,
+    records []*models.Record,
+    failFast bool,
+) ([]recordFailure, error) {
+    defer br.Close() //nolint:errcheck
+
+    var (
+        batchErr error
+        failures []recordFailure
+    )
+    for _, record := range records {
+        _, err := br.Exec()
+        if err == nil {
+            continue
+        }
+
+        tableName, tblErr := s.getTableName(record)
+        if tblErr != nil {
+            tableName = "unknown"
+        }
+        failure := recordFailure{
+            tableName: tableName,
+            data:      record.RawData,
+            err:       err,
+            meta:      buildFailedMeta(record, err),
+        }
+
+        if failFast {
+            return []recordFailure{failure}, classifyError(
+                fmt.Errorf("failed to write record %s: %w", record.ID, err),
+            )
+        }
+
+        failures = append(failures, failure)
+        batchErr = errors.Join(
+            batchErr,
+            classifyError(fmt.Errorf(
+                "failed to write record %s: %w", record.ID, err,
+            )),
+        )
+    }
+
+    if batchErr != nil {
+        return failures, classifyJoined(batchErr)
+    }
+    return nil, nil
+}
+```
+
+**Refactor `executeBatch`** to use both extracted helpers and dispatch CDC:
 
 ```go
 func (s *PostgresSink) executeBatch(ctx, records) ([]recordFailure, error) {
@@ -382,13 +464,19 @@ func (s *PostgresSink) executeBatch(ctx, records) ([]recordFailure, error) {
     }
 
     prepareStart := time.Now()
-    batch, err := s.buildUpsertBatch(records)  // extracted
+    batch, err := s.buildUpsertBatch(records)
     if err != nil {
         return nil, err
     }
     prepareDuration := time.Since(prepareStart)
 
-    // ... rest unchanged (SendBatch, per-record error handling, timing)
+    executeStart := time.Now()
+    br := s.pool.SendBatch(ctx, batch)
+    failures, err := s.sendAndProcessBatch(ctx, br, records, false) // failFast=false
+    executeDuration := time.Since(executeStart)
+
+    // ... timing log unchanged
+    return failures, err
 }
 ```
 
@@ -411,32 +499,16 @@ func (s *PostgresSink) executeBatchWithCDC(ctx, records) ([]recordFailure, error
         return nil, classifyError(fmt.Errorf("CDC detect changes: %w", err))
     }
 
-    // Phase 2: Execute upserts (fail-fast, rollback on any error)
+    // Phase 2: Execute upserts (fail-fast via shared helper)
     batch, err := s.buildUpsertBatch(records)
     if err != nil {
         return nil, err
     }
     br := tx.SendBatch(ctx, batch)
-    for _, record := range records {
-        if _, err := br.Exec(); err != nil {
-            br.Close()
-            // Store the first failing record for diagnostics
-            tableName, tblErr := s.getTableName(record)
-            if tblErr != nil {
-                tableName = "unknown"
-            }
-            failure := recordFailure{
-                tableName: tableName,
-                data:      record.RawData,
-                err:       err,
-                meta:      buildFailedMeta(record, err),
-            }
-            return []recordFailure{failure}, classifyError(
-                fmt.Errorf("upsert record %s: %w", record.ID, err),
-            )
-        }
+    failures, err := s.sendAndProcessBatch(ctx, br, records, true) // failFast=true
+    if err != nil {
+        return failures, err
     }
-    br.Close()
 
     // Phase 3: Write outbox (only if changes detected)
     if len(events) > 0 {
