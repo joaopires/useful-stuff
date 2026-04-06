@@ -22,14 +22,36 @@ Poll (1s interval) → SELECT WHERE status = 'PENDING' (FOR UPDATE SKIP LOCKED)
 
 ## Event transformation
 
-The outbox row (`event.ChangeEvent`) is transformed into a flat published event before sending to Solace:
+The outbox row (`event.ChangeEvent`) is transformed into a published event before sending to Solace:
 
 1. Generate `eventId` (UUID v4)
 2. Merge `EntityKey` fields as top-level keys (e.g. `retail_chain_id`, `store_id`, `item_id`)
 3. Merge `Payload` fields as top-level keys (all entity-specific data)
 4. Set `send_date` to current time (ISO 8601)
 
-The resulting event is a flat JSON object matching the client-provided schemas (Store, Product, Label, AccessPoint). The `EventType` and `EntityType` fields from the outbox row are not included in the published event — `EntityType` is used for topic routing (`esl/events/{entity_type}`).
+The `EventType` and `EntityType` fields from the outbox row are not included in the published event — `EntityType` is used for topic routing (`esl/events/{entity_type}`).
+
+### Payload format by event type
+
+**CREATED** — `Payload` contains all entity fields as flat key-value pairs (excluding conflict keys, which are in `EntityKey`). Includes `created_at` and `last_updated_at`. After merging `EntityKey` + `Payload`, the result is a flat JSON object matching the client-provided entity schemas.
+
+**UPDATED** — `Payload` contains a **mix** of two formats:
+
+- **Changed business fields**: nested diff objects `{"old": X, "new": Y}`
+- **Audit columns** (`created_at`, `last_updated_at`): flat string values (always included, not as diffs)
+
+Example UPDATED payload from the outbox:
+
+```json
+{
+  "name": {"old": "Store Alpha", "new": "Store Beta"},
+  "status": {"old": "active", "new": "inactive"},
+  "created_at": "2026-03-01T10:00:00Z",
+  "last_updated_at": "2026-04-06T14:30:00Z"
+}
+```
+
+After merging `EntityKey` + `Payload`, the published event for UPDATED contains conflict keys as flat values, changed fields as `{old, new}` diffs, and audit columns as flat values. The event-publisher does not need to distinguish between these — it merges all `Payload` fields as top-level keys regardless of their internal structure.
 
 **Note:** Only `CREATED` and `UPDATED` events are handled in Phase 2. The `DELETED` change type exists in esl-common but the event-publisher should ignore it (skip or log a warning) until a later iteration implements delete detection.
 

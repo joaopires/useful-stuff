@@ -2,45 +2,40 @@
 
 **Scope:** `datapipeline` project — CDC detection in the sink
 **Depends on:** shared package (esl-common latest commit on main), database migrations (V1.0.0.15–17)
-**Status:** Prerequisites in progress (1 of 3 done)
+**Status:** Prerequisites done — CDC implementation not started
 
 ## Prerequisite tasks
 
-### Refactor: replace hardcoded entity strings with `entity.EntityType`
-
-The datapipeline currently uses hardcoded `"store"`, `"product"`, `"label"`, `"accesspoint"` strings throughout. As part of the CDC work (which introduces the esl-common dependency anyway), replace these with `entity.EntityType` constants:
-
-- **`internal/connector/vusion/vusion.go`** — `createRecord()` calls pass string literals for entity type → use `entity.Store`, `entity.Product`, etc.
-- **`internal/transformer/normalizer/normalizer.go`** — strategy map keys are strings → use `entity.EntityType` keys
-- **`internal/sink/postgres/` config/tests** — `TableConfig` map keys and test fixtures → use `entity.EntityType`
-
-This ensures type safety and a single source of truth for entity type values across both datapipeline and event-publisher.
+### ~~Refactor: replace hardcoded entity strings with `entity.EntityType`~~ ✅ DONE (2026-04-06, commit 42a6a7e)
 
 ### ~~Code quality: add golangci-lint config~~ ✅ DONE (2026-03-31, commit a62bdd4)
 
-- Added `.golangci.yml` (v2 format) with: `errcheck`, `gosec`, `staticcheck`, `ineffassign`, and `gofumpt` formatter
-- Added `GOLANGCI_LINT_VERSION=v2.8.0` variable and `install-lint` target to the Makefile
-- Updated `lint` target to depend on `install-lint` and use `--config=.golangci.yml`
-- Fixed 59 lint findings across 47 files, `make lint` passes with 0 issues
+### ~~Refactor: adopt `postgres` package from esl-common~~ ✅ DONE (2026-04-06, commit 2bae4c5)
 
-### Refactor: adopt `postgres` package from esl-common
-
-esl-common now provides a `postgres` package with shared pool creation and error classification. As part of adopting the updated esl-common dependency:
-
-- **Pool creation** — replace duplicated `pgxpool` setup in the sink builder and state store with `postgres.NewPool`. Each service maps its own config format to `postgres.PoolConfig`.
-- **Error classification** — refactor `internal/sink/postgres/errors.go` (`classifyError`) to delegate to `postgres.ClassifyError` and `postgres.IsTransient`. App-specific behavior (failed record storage, batch error joining, `records_with_errors` table writes) stays in the datapipeline.
-- **Fix `classifyJoined` retry logic** — the current implementation treats any unclassified error as transient (if not all errors are permanent, the joined error is wrapped as transient). This causes unrecognized PG errors (e.g. `42703` — undefined column) to burn through retries with backoff instead of failing fast. Replace with: retry only when `postgres.IsTransient` returns true; unclassified errors should not be retried.
-
-### Fix integration test table schemas
-
-The shared `createTestTable` helper in `postgres_integration_test.go` creates tables without the `last_updated_at` column, but `query.go` hardcodes `"last_updated_at" = NOW()` in the upsert ON CONFLICT clause. PostgreSQL validates the full statement at parse time, so even non-conflicting INSERTs fail with `42703`. Combined with the `classifyJoined` bug above, this makes every test that uses `createTestTable` retry to exhaustion (~7s per test, ~140s for ConnectionPool).
-
-- Add `last_updated_at TIMESTAMP` to `createTestTable` helper
-- Add the same column to custom table creation in `TestPostgresSink_Integration_BatchContinuesAfterPartialFailure`
+Includes: pool creation via `commonpg.NewPool`, error classification via `commonpg.IsTransient`/`ClassifyError`, `classifyJoined` bug fix, `context.Context` threaded from caller through `Build`/`New`, integration test table schema fixes, and rewritten broken integration tests (CHECK constraint violations instead of impossible unique violations in upsert mode).
 
 ---
 
 ## CDC Implementation
+
+### Design decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Single-writer assumption | READ COMMITTED (default) | The datapipeline is the sole writer to entity tables. No concurrent writes means no risk of missed diffs between SELECT and upsert. If another service starts writing, revisit isolation level (SERIALIZABLE or row-level locking). Add code comment at `pool.Begin()`. |
+| Conflict keys for CDC | `entity.ConflictKeys` from esl-common | Single source of truth for entity business keys. YAML `TableConfig.ConflictKeys` stays only for the upsert `ON CONFLICT` clause. Follow-up: remove YAML `ConflictKeys` duplication and have the upsert builder also read from `entity.ConflictKeys`. |
+| Type comparison | `::TEXT` cast in SELECT + string normalization | Avoids pgtype vs native Go type mismatches. Both sides normalized to string for comparison. |
+| Column selection | Explicit column list from `RawData` keys | No `SELECT *` — only fetch columns being upserted. Avoids false diffs from DB-only columns. |
+| Error handling | First failing record stored + error propagated | CDC batch is atomic — first error rolls back everything. Store the triggering record in `records_with_errors` for debugging, propagate error via `Ack(err)` to all records in the batch. |
+
+### Column handling in events
+
+| Column category | Comparison | CREATED payload | UPDATED payload |
+|---|---|---|---|
+| Conflict keys | Skip | Skip (in `EntityKey`) | Skip (in `EntityKey`) |
+| `created_at` | Skip | Include | Include (flat value) |
+| `last_updated_at` | Skip | Include | Include (flat value) |
+| Business fields | Compare | Include | Only changed fields as `{"old": X, "new": Y}` |
 
 ### Performance design
 
@@ -62,7 +57,7 @@ Total: 4–5 RTs. Each phase is a clean, single-responsibility step.
 > An earlier draft combined SELECT + upserts into one SendBatch to save 1 RT.
 > Dropped: the coupling violated SRP and saved only ~0.1ms on LAN — not worth the complexity.
 
-**Error semantics**: CDC path rolls back entire batch on any failure (vs current per-record continuation). Required because partial upserts + partial outbox is invalid.
+**Error semantics**: CDC path rolls back entire batch on any failure (vs current per-record continuation). Required because partial upserts + partial outbox is invalid. All records in the batch receive the same error via `Ack(err)`. The first failing record is stored in `records_with_errors` for diagnostics.
 
 **No deadlock risk**: The sink has a single worker goroutine (`startWorker`). All stores' records flow through a shared channel, and batches are flushed sequentially — never concurrently.
 
@@ -103,11 +98,11 @@ type CDC struct {
 }
 
 // DetectChanges groups records by entity type, fetches existing state,
-// and classifies each record as CREATED, MODIFIED, or unchanged.
+// and classifies each record as CREATED, UPDATED, or unchanged.
 func (c *CDC) DetectChanges(
     ctx context.Context,
     tx pgx.Tx,
-    records []*models.OutputRecord,
+    records []*models.Record,
     tables map[string]TableConfig,
 ) ([]event.ChangeEvent, error)
 
@@ -127,28 +122,32 @@ The upsert batch-building logic is currently inlined in `executeBatch`. Extract 
 // buildUpsertBatch builds a pgx.Batch with upsert queries for all records.
 // Used by both executeBatch (non-CDC) and executeBatchWithCDC.
 func (s *PostgresSink) buildUpsertBatch(
-    records []*models.OutputRecord,
+    records []*models.Record,
 ) (*pgx.Batch, error)
 ```
 
 #### Thin orchestrator (ISP, DIP)
 
-`executeBatchWithCDC` is a small coordinator — it owns the transaction lifecycle and delegates each step:
+`executeBatchWithCDC` is a small coordinator — it owns the transaction lifecycle and delegates each step. Returns `([]recordFailure, error)` to match the non-CDC `executeBatch` signature, enabling `writeBatch` to store the failing record in `records_with_errors` after retry exhaustion.
 
 ```go
-func (s *PostgresSink) executeBatchWithCDC(ctx, records) error {
+func (s *PostgresSink) executeBatchWithCDC(ctx, records) ([]recordFailure, error) {
+    // Uses READ COMMITTED (default). Safe because the datapipeline is the
+    // sole writer to entity tables — no concurrent modifications between
+    // SELECT and upsert. Revisit if another service starts writing.
     tx, _ := s.pool.Begin(ctx)
     defer tx.Rollback(ctx)
 
     events, _ := s.cdc.DetectChanges(ctx, tx, records, s.config.Tables)
 
     batch, _ := s.buildUpsertBatch(records)     // DRY: shared with non-CDC
-    // ... send batch on tx, fail-fast on error
+    // ... send batch on tx, fail-fast on first error
+    // On error: return []recordFailure with 1 entry for the failing record
 
     if len(events) > 0 {
         s.cdc.WriteOutbox(ctx, tx, events)
     }
-    return tx.Commit(ctx)
+    return nil, tx.Commit(ctx)
 }
 ```
 
@@ -226,16 +225,18 @@ var auditColumns = map[string]bool{
 
 ```go
 func groupByEntityType(
-    records []*models.OutputRecord,
+    records []*models.Record,
     tables map[string]TableConfig,
 ) map[string]entityGroup
 
 type entityGroup struct {
     tableName    string
-    conflictKeys []string
-    records      []*models.OutputRecord
+    conflictKeys []string   // from entity.ConflictKeys, used for fetch + event key
+    records      []*models.Record
 }
 ```
+
+Uses `entity.ConflictKeys[entityType]` as the source of truth for business keys. Skips entity types not present in `entity.ConflictKeys` (cannot build events without known business keys).
 
 **`buildEntityKey`** — builds lookup key + JSON-serializable key map:
 
@@ -247,34 +248,58 @@ func buildEntityKey(data map[string]any, conflictKeys []string) (string, map[str
 - Key map: `{"retail_chain_id": "RC001", ...}`
 - Uses `fmt.Sprintf("%v", val)` to normalize
 
-**`buildFetchQuery`** — builds SELECT with composite PK IN clause:
+**`buildFetchQuery`** — builds SELECT with explicit column list and `::TEXT` casting:
 
 ```go
 func buildFetchQuery(
     schema, tableName string,
     conflictKeys []string,
-    records []*models.OutputRecord,
+    columns []string,
+    records []*models.Record,
 ) (string, []any)
 ```
 
-Generates: `SELECT * FROM schema.table WHERE (pk1, pk2) IN (($1,$2), ($3,$4), ...)`
+Generates:
+
+```sql
+SELECT col1::TEXT, col2::TEXT, ... FROM schema.table
+WHERE (pk1, pk2) IN (($1,$2), ($3,$4), ...)
+```
+
+The `columns` list is derived from `RawData` keys of the first record in the group. Only fetches columns being upserted — no `SELECT *`.
+
+**`normalizeValue`** — converts any Go value to its string representation for comparison:
+
+```go
+func normalizeValue(v any) string
+```
+
+Handles the types present in `RawData` (from JSON deserialization):
+- `string` → as-is
+- `float64` → format as number, strip trailing `.0` for whole numbers
+- `bool` → `"true"` / `"false"`
+- `[]any` (string slices from JSON) → sort, JSON marshal
+- `nil` → `"<nil>"`
+- Everything else → `fmt.Sprintf("%v", v)`
+
+DB values arrive as `string` (via `::TEXT` cast) and are compared directly against normalized `RawData` values.
 
 **`classifyAndDiff`** — compares incoming vs existing, returns change events:
 
 ```go
 func classifyAndDiff(
     existing map[string]map[string]any,
-    records []*models.OutputRecord,
+    records []*models.Record,
     entityType string,
     conflictKeys []string,
 ) []event.ChangeEvent
 ```
 
-- Key not in existing → `CREATED` (payload = full record data, excluding audit cols)
-- Key in existing, fields differ → `MODIFIED` (payload = `{"field": {"old": X, "new": Y}}`)
+- Key not in existing → `event.ChangeTypeCreated` (payload = all fields except conflict keys)
+- Key in existing, fields differ → `event.ChangeTypeUpdated` (payload = `{"field": {"old": X, "new": Y}}` for changed business fields, plus `created_at` and `last_updated_at` as flat values)
 - Identical → skip
-- Comparison via `normalizeValue(v) string` — handles int/int64, float/float64, time.Time formatting
-- Audit columns (`created_at`, `last_updated_at`) excluded from comparison and CREATED payloads
+- Comparison skips audit columns and conflict keys
+- Both sides normalized to string before comparison
 
 **`buildOutboxInsert`** — builds single multi-row INSERT for efficiency:
 
@@ -294,8 +319,13 @@ func (c *CDC) DetectChanges(ctx, tx, records, tables) ([]event.ChangeEvent, erro
     var allEvents []event.ChangeEvent
 
     for entityType, group := range groups {
-        query, args := buildFetchQuery(c.schema, group.tableName, group.conflictKeys, group.records)
+        // Build column list from first record's RawData keys
+        columns := sortedKeys(group.records[0].RawData)
+
+        query, args := buildFetchQuery(c.schema, group.tableName, group.conflictKeys, columns, group.records)
         rows, _ := tx.Query(ctx, query, args...)
+
+        // All values arrive as string due to ::TEXT casting
         existingRows, _ := pgx.CollectRows(rows, pgx.RowToMap)
 
         existing := make(map[string]map[string]any, len(existingRows))
@@ -330,7 +360,7 @@ func (c *CDC) WriteOutbox(ctx, tx, events) error {
 **Extract `buildUpsertBatch`** from `executeBatch` (DRY):
 
 ```go
-func (s *PostgresSink) buildUpsertBatch(records []*models.OutputRecord) (*pgx.Batch, error) {
+func (s *PostgresSink) buildUpsertBatch(records []*models.Record) (*pgx.Batch, error) {
     batch := &pgx.Batch{}
     for _, record := range records {
         query, args, _, err := s.prepareQuery(record)
@@ -346,7 +376,7 @@ func (s *PostgresSink) buildUpsertBatch(records []*models.OutputRecord) (*pgx.Ba
 **Refactor `executeBatch`** to use `buildUpsertBatch` and dispatch CDC:
 
 ```go
-func (s *PostgresSink) executeBatch(ctx, records) error {
+func (s *PostgresSink) executeBatch(ctx, records) ([]recordFailure, error) {
     if s.cdc != nil {
         return s.executeBatchWithCDC(ctx, records)
     }
@@ -354,7 +384,7 @@ func (s *PostgresSink) executeBatch(ctx, records) error {
     prepareStart := time.Now()
     batch, err := s.buildUpsertBatch(records)  // extracted
     if err != nil {
-        return err
+        return nil, err
     }
     prepareDuration := time.Since(prepareStart)
 
@@ -365,29 +395,45 @@ func (s *PostgresSink) executeBatch(ctx, records) error {
 **Add `executeBatchWithCDC`**:
 
 ```go
-func (s *PostgresSink) executeBatchWithCDC(ctx, records) error {
+func (s *PostgresSink) executeBatchWithCDC(ctx, records) ([]recordFailure, error) {
+    // Uses READ COMMITTED (default). Safe because the datapipeline is the
+    // sole writer to entity tables — no concurrent modifications between
+    // SELECT and upsert. Revisit if another service starts writing.
     tx, err := s.pool.Begin(ctx)
     if err != nil {
-        return fmt.Errorf("begin transaction: %w", err)
+        return nil, classifyError(fmt.Errorf("begin transaction: %w", err))
     }
     defer tx.Rollback(ctx)
 
     // Phase 1: Detect changes (SELECT + classify)
     events, err := s.cdc.DetectChanges(ctx, tx, records, s.config.Tables)
     if err != nil {
-        return fmt.Errorf("CDC detect changes: %w", err)
+        return nil, classifyError(fmt.Errorf("CDC detect changes: %w", err))
     }
 
     // Phase 2: Execute upserts (fail-fast, rollback on any error)
     batch, err := s.buildUpsertBatch(records)
     if err != nil {
-        return err
+        return nil, err
     }
     br := tx.SendBatch(ctx, batch)
     for _, record := range records {
         if _, err := br.Exec(); err != nil {
             br.Close()
-            return fmt.Errorf("upsert record %s: %w", record.ID, err)
+            // Store the first failing record for diagnostics
+            tableName, tblErr := s.getTableName(record)
+            if tblErr != nil {
+                tableName = "unknown"
+            }
+            failure := recordFailure{
+                tableName: tableName,
+                data:      record.RawData,
+                err:       err,
+                meta:      buildFailedMeta(record, err),
+            }
+            return []recordFailure{failure}, classifyError(
+                fmt.Errorf("upsert record %s: %w", record.ID, err),
+            )
         }
     }
     br.Close()
@@ -395,11 +441,11 @@ func (s *PostgresSink) executeBatchWithCDC(ctx, records) error {
     // Phase 3: Write outbox (only if changes detected)
     if len(events) > 0 {
         if err := s.cdc.WriteOutbox(ctx, tx, events); err != nil {
-            return fmt.Errorf("CDC write outbox: %w", err)
+            return nil, classifyError(fmt.Errorf("CDC write outbox: %w", err))
         }
     }
 
-    return tx.Commit(ctx)
+    return nil, tx.Commit(ctx)
 }
 ```
 
@@ -408,10 +454,10 @@ func (s *PostgresSink) executeBatchWithCDC(ctx, records) error {
 **In `CDC.DetectChanges`** — log + metrics:
 
 ```go
-s.logger.WithFields(map[string]interface{}{
+c.logger.WithFields(map[string]interface{}{
     "batch_size":      len(records),
     "cdc_created":     createdCount,
-    "cdc_modified":    modifiedCount,
+    "cdc_updated":     updatedCount,
     "cdc_unchanged":   unchangedCount,
     "cdc_fetch_ms":    fetchDuration.Milliseconds(),
     "cdc_classify_ms": classifyDuration.Milliseconds(),
@@ -421,15 +467,15 @@ s.logger.WithFields(map[string]interface{}{
 **In `CDC.WriteOutbox`** — log + metrics:
 
 ```go
-s.logger.DebugWithFields("CDC outbox write", map[string]interface{}{
+c.logger.WithFields(map[string]interface{}{
     "event_count":   len(events),
     "cdc_outbox_ms": duration.Milliseconds(),
-})
+}).Debug("CDC outbox write")
 ```
 
 **OTel metrics** (via existing `telemetry.Metrics`):
 
-- Counter: `sink.cdc.events` with attribute `event_type=CREATED|MODIFIED`
+- Counter: `sink.cdc.events` with attribute `event_type=CREATED|UPDATED`
 - Histogram: `sink.cdc.detect_duration_ms`
 - Histogram: `sink.cdc.outbox_duration_ms`
 
@@ -441,7 +487,7 @@ s.logger.DebugWithFields("CDC outbox write", map[string]interface{}{
 - **Architecture → Data Flow**: Update diagram to show CDC branch
 - **Features → Core Capabilities**: Add CDC bullet point
 - **Configuration**: New "CDC Settings" table documenting `cdc.enabled` (bool, default false)
-- **Write Strategy**: Add "CDC-Enabled Write Strategy" subsection — transactional flow, outbox pattern, error semantics
+- **Write Strategy**: Add "CDC-Enabled Write Strategy" subsection — transactional flow, outbox pattern, error semantics, single-writer assumption
 - **Telemetry → Metrics**: Add CDC-specific metrics
 - **Performance Tuning**: Add note about CDC overhead (3–4 extra RTs)
 - **Testing**: Add CDC test cases to listing
@@ -451,7 +497,7 @@ s.logger.DebugWithFields("CDC outbox write", map[string]interface{}{
 Add CDC config block (disabled by default) under `sink.postgres`:
 
 ```yaml
-    # CDC (Change Data Capture) — detects CREATED/MODIFIED records
+    # CDC (Change Data Capture) — detects CREATED/UPDATED records
     # and writes events to the event_outbox table atomically.
     # Requires event_outbox table to exist (see database migrations).
     cdc:
@@ -477,25 +523,29 @@ Add CDC config block (enabled for testing) under `sink.postgres`:
 Table-driven:
 
 - `TestBuildEntityKey` — single/composite keys, nil values
-- `TestBuildFetchQuery` — correct SQL + args for 1 and N records
-- `TestClassifyAndDiff_Created` — new record → CREATED with full payload
-- `TestClassifyAndDiff_Modified` — changed fields → MODIFIED with diff
+- `TestBuildFetchQuery` — correct SQL with `::TEXT` casts + args for 1 and N records
+- `TestClassifyAndDiff_Created` — new record → CREATED with full payload (excluding conflict keys, including audit cols)
+- `TestClassifyAndDiff_Updated` — changed fields → UPDATED with diff + flat audit columns
 - `TestClassifyAndDiff_Unchanged` — identical → no event
-- `TestClassifyAndDiff_AuditColumnsExcluded` — audit col changes ignored
-- `TestClassifyAndDiff_TypeNormalization` — int vs int64
+- `TestClassifyAndDiff_AuditColumnsExcluded` — audit col changes ignored in comparison
+- `TestClassifyAndDiff_ConflictKeysExcluded` — conflict keys excluded from comparison and payloads
+- `TestClassifyAndDiff_TypeNormalization` — `float64(42)` normalized to `"42"` matches DB `"42"`
+- `TestNormalizeValue` — all types: string, float64 (whole + decimal), bool, []any, nil, time strings
 - `TestBuildOutboxInsert` — correct SQL, JSON marshaling
-- `TestGroupByEntityType` — mixed types grouped correctly
+- `TestGroupByEntityType` — mixed types grouped correctly, entity types not in `entity.ConflictKeys` skipped
 
 ### Integration tests (`cdc_integration_test.go`) — real Postgres
 
 Reuse shared testcontainer from existing `TestMain`:
 
 - **New record → CREATED**: upsert new record → outbox has CREATED event with full snapshot
-- **Changed record → MODIFIED**: insert, then upsert changed → outbox has MODIFIED event with diff
+- **Changed record → UPDATED**: insert, then upsert changed → outbox has UPDATED event with diff + audit cols as flat values
 - **Unchanged record → no event**: insert, upsert same → no outbox entry
 - **CDC disabled → no overhead**: `cdc.enabled=false` → no outbox writes, no transaction
 - **Mixed batch**: multiple entity types → correct events per type
 - **Atomicity**: upsert fails mid-batch → no outbox events written (rollback)
+- **Transient error during CDC → retry succeeds**: trigger simulated serialization error on first attempt, verify second attempt commits and outbox events are written
+- **Permanent error during CDC → fail fast**: trigger CHECK constraint violation, verify first failing record stored in `records_with_errors`, error propagated via `Ack`
 
 ### Benchmark tests (`cdc_benchmark_test.go`) — real Postgres
 
@@ -520,6 +570,7 @@ Batch sizes: 10, 50, 100, 500. Report ns/op and allocs.
 
 ---
 
-## Post-implementation note
+## Follow-up tasks (post-CDC)
 
-After the datapipeline implementation is complete and the esl-common code has been validated in practice, check whether a new esl-common tag (e.g. `v0.2.0`) should be created and referenced in `go.mod` instead of a commit hash.
+- **Remove YAML `ConflictKeys` duplication**: Have the upsert builder read from `entity.ConflictKeys` instead of `TableConfig.ConflictKeys`. Eliminates divergence risk and simplifies config.
+- **esl-common tag**: After CDC is validated in practice, create a new tag (e.g. `v0.2.0`) and update `go.mod` to reference it instead of a commit hash.

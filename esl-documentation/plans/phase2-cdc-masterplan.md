@@ -42,7 +42,10 @@ Connector → Transformer → Sink ──┐
 | Repo layout | Separate repo + shared `esl-go-commons` package | Follows one-repo-per-component pattern, clean SRP |
 | Solace topics | `esl/events/{entity_type}` | Event type in payload, not topic. Schema TBD |
 | Feature flag | `cdc.enabled` in sink config | Safe rollout, existing behavior preserved when off |
-| Comparison scope | All non-PK, non-audit columns | `created_at`/`last_updated_at` excluded; source `modification_date` included |
+| Comparison scope | All non-PK, non-audit columns | `created_at`/`last_updated_at` excluded from comparison; conflict keys excluded (in `EntityKey`); source `modification_date` included |
+| Type comparison strategy | `::TEXT` cast in SELECT + string normalization | Avoids pgtype vs native Go type mismatches (e.g. `int32` vs `float64`, `time.Time` vs `string`). Both sides normalized to string for comparison. |
+| Single-writer assumption | READ COMMITTED (default isolation) | The datapipeline is the sole writer to entity tables. No concurrent writes means no risk of missed diffs between SELECT and upsert within the CDC transaction. If another service starts writing to entity tables, revisit isolation level (SERIALIZABLE or row-level locking). |
+| CDC conflict keys | `entity.ConflictKeys` from esl-common | Single source of truth for entity business keys in CDC. YAML `TableConfig.ConflictKeys` stays only for the upsert `ON CONFLICT` clause (follow-up: unify). |
 | Outbox status tracking | Explicit `status` column (`PENDING`, `DELIVERED`, `FAILED`) | Enables failure tracking and observability; `delivered_at` kept for timestamp |
 | Outbox consumption | Polling (`FOR UPDATE SKIP LOCKED`) over WAL logical replication | Simpler ops (no `wal_level=logical`, no replication slots, no WAL bloat risk), sufficient latency (1s), free observability via `status` column; WAL streaming better suited for high-throughput/low-latency scenarios |
 
@@ -79,9 +82,9 @@ Connector → Transformer → Sink ──┐
 | 1b | esl-go-commons: postgres package (pool + error classification) | Done |
 | 2 | database migrations (outbox) | Done |
 | 3 | DOCS: introduction, architecture, database | Done |
-| 4a | datapipeline: replace entity strings with esl-common constants | Not started |
-| 4b | datapipeline: adopt esl-common postgres package | Not started |
-| 4c | datapipeline CDC | Not started (blocked on 4a, 4b) |
+| 4a | datapipeline: replace entity strings with esl-common constants | Done (2026-04-06, commit 42a6a7e) |
+| 4b | datapipeline: adopt esl-common postgres package | Done (2026-04-06, commit 2bae4c5) |
+| 4c | datapipeline CDC | Not started |
 | 5 | go-solace-sdk (Solace Go client library) | Done (Phases 1-4 + 6a complete — connection, telemetry, producer, integration tests, README; consumer phases 5/6b deferred to ESL Phase 3) |
 | 5b | database migration: add `status` column to outbox | Not started |
 | 6 | event-publisher | Not started |
