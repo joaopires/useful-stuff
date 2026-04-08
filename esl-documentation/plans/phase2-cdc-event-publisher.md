@@ -3,15 +3,17 @@
 **Scope:** New `event-publisher` repository
 **Depends on:** shared package (esl-common latest commit on main — includes `entity`, `event`, and `postgres` packages), go-solace-sdk, database migrations
 
-## Repository setup (pre-implementation)
+## Repository setup (pre-implementation) — DONE
 
-1. Delete template leftovers: `database/`, `flyway.conf`
-2. Rewrite `README.md` with proper project content
-3. Scaffold Go module: `go.mod`, directory structure (`cmd/`, `internal/`)
-4. Add `Makefile` with all targets (build, test, test-integration, lint, install-lint, run, docker-build)
-5. Add `.golangci.yml` (v2 format)
-6. Add `Dockerfile` (multi-stage build)
-7. Add initial `config.yaml` (application config, not CI)
+1. ~~Delete template leftovers: `database/`, `flyway.conf`~~
+2. ~~Rewrite `README.md` with proper project content~~
+3. ~~Scaffold Go module: `go.mod`, directory structure (`cmd/`, `internal/`)~~
+4. ~~Add `Makefile` with all targets (build, test, test-integration, lint, install-lint, run, docker-build)~~
+5. ~~Add `.golangci.yml` (v2 format)~~
+6. ~~Add `Dockerfile` (multi-stage build)~~
+7. ~~Add initial `config.yaml` (application config, not CI)~~
+
+Committed: `b72967c` — pushed to `main`.
 
 ## Architecture
 
