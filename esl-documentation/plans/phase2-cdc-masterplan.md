@@ -113,6 +113,11 @@ Documentation should be written incrementally — each completed scoped plan pro
 | event-publisher | Event Publisher (new section) — include a decision rationale subsection explaining polling vs WAL streaming trade-offs and why polling was chosen |
 | k8s-helm | Deployment, Operations |
 
+## Post-implementation
+
+1. **Tag esl-common** — once all consumers (datapipeline, datafetch, event-publisher) are stable, create a semver tag (e.g. `v0.2.0`) and update all `go.mod` references from commit hashes to the tag
+2. **Tag go-solace-sdk** — same approach, create a semver tag and reference it from event-publisher's `go.mod`
+
 ## Conventions
 
 - **Integration tests use `TestMain`**: When integration tests share an expensive resource (e.g. a Testcontainers container), use `TestMain(m *testing.M)` for setup/teardown and a package-level variable to hold the shared resource. Each test must be an independent top-level `TestXxx` function, not a subtest under a parent. This ensures output streams in real time and tests can be run individually.

@@ -70,6 +70,8 @@ Single transaction: `SELECT FOR UPDATE SKIP LOCKED` → publish → `UPDATE` →
 - Batch size is capped (100 events)
 - Single publisher instance expected
 
+**Scaling note:** `FOR UPDATE SKIP LOCKED` naturally supports multiple replicas — PostgreSQL skips rows already locked by other transactions, so each replica automatically gets a distinct set of rows with no coordination needed. The only caveat is **event ordering per entity**: with multiple replicas, two events for the same entity could be picked up by different replicas and published out of order. If downstream consumers require per-entity ordering, this would need partitioning by entity key (e.g. consistent hashing). For now, single replica is sufficient.
+
 **Note:** Use `entity.EntityType` from esl-common when reading `entity_type` from the outbox table and when resolving the Solace topic segment. This provides compile-time safety and consistency with the datapipeline.
 
 ## Event transformation
@@ -107,7 +109,12 @@ Example UPDATED payload from the outbox:
 }
 ```
 
-After merging `EntityKey` + `Payload`, the published event for UPDATED contains conflict keys as flat values, changed fields as `{old, new}` diffs, and audit columns as flat values. The event-publisher does not need to distinguish between these — it merges all `Payload` fields as top-level keys regardless of their internal structure.
+The published event is always **flat** — no `{old, new}` diffs are sent to Solace. The `{old, new}` structure stays in the outbox for auditing purposes only. The transform step uses the `event_type` column to decide how to handle the payload:
+
+- **CREATED** (`event_type = 'CREATED'`): payload is already flat — merge as-is
+- **UPDATED** (`event_type = 'MODIFIED'`): iterate payload fields — if a value is an object with a `"new"` key, extract only the `"new"` value; otherwise (audit columns) pass through as-is
+
+The result is that both CREATED and UPDATED published events have the same flat structure: `eventId` + conflict keys + entity fields (current values only) + `send_date`. Downstream consumers distinguish between creation and update events via the Solace topic (`{messageType}` segment: `created` or `updated`), not the payload.
 
 **Note:** Only `CREATED` and `UPDATED` events are handled in Phase 2. The datapipeline currently only generates these two types.
 
@@ -155,14 +162,14 @@ in-store/orchestratoresl/{entitySegment}/{messageType}/v1/{insignia}/{storeId}
 | `store` | `stores/store` |
 | `product` | `products/product` |
 | `label` | `labels/label` |
-| `accesspoint` | `acesspoints/acesspoint` |
+| `accesspoint` | `accesspoints/accesspoint` |
 
 **Example topics:**
 
 - Store created: `in-store/orchestratoresl/stores/store/created/v1/continente_pt/000010`
 - Product updated: `in-store/orchestratoresl/products/product/updated/v1/continente_pt/000010`
 - Label created: `in-store/orchestratoresl/labels/label/created/v1/continente_pt/000010`
-- Access point updated: `in-store/orchestratoresl/acesspoints/acesspoint/updated/v1/continente_pt/000010`
+- Access point updated: `in-store/orchestratoresl/accesspoints/accesspoint/updated/v1/continente_pt/000010`
 
 ### Solace publishing
 
@@ -189,39 +196,55 @@ Use `postgres.PoolConfig` and `postgres.NewPool` from esl-common for pool creati
 
 ## Config structure
 
+**Note:** `schema` will be added to esl-common `postgres.PoolConfig` (setting `search_path` at pool level) before implementation. Once done, queries use unqualified table names. All database fields below map directly to `postgres.PoolConfig`.
+
 ```yaml
+# PostgreSQL connection settings (all fields map to esl-common postgres.PoolConfig)
 database:
-  host: localhost
-  port: 5432
-  user: esl
-  password: ""
-  name: esl
-  schema: esl
-  ssl_mode: disable
+  host: localhost              # database server hostname
+  port: 5432                   # database server port
+  user: esl                    # database user
+  password: ""                 # database password
+  database: esl                # database name
+  schema: esl                  # schema for search_path (set at pool level)
+  ssl_mode: disable            # SSL mode: disable, require, verify-ca, verify-full
+  application_name: "event-publisher"  # application name sent to PostgreSQL (visible in pg_stat_activity)
+  max_conns: 4                 # maximum number of connections in the pool
+  min_conns: 1                 # minimum number of idle connections maintained
+  max_conn_lifetime: "1h"      # maximum lifetime of a connection before it is closed and replaced
+  max_conn_idle_time: "30m"    # maximum time a connection can sit idle before being closed
+  health_check_period: "1m"    # how often idle connections are health-checked
+  connect_timeout: "5s"        # timeout for establishing a new connection
 
+# Solace broker connection and messaging settings
 solace:
-  host: tcp://localhost:55555
-  vpn: default
-  username: admin
-  password: admin
-  topic_prefix: "in-store/orchestratoresl"
-  connect_timeout: "10s"
-  reconnect_retries: 3
-  reconnect_wait: "2s"
-  confirmation_timeout: "10s"
+  host: tcp://localhost:55555   # broker URL (tcp:// or tcps:// for TLS)
+  vpn: default                  # message VPN name
+  username: admin               # broker authentication username
+  password: admin               # broker authentication password
+  topic_prefix: "in-store/orchestratoresl"  # base prefix for all published topics
+  connect_timeout: "10s"        # TCP connection timeout (min: 1s)
+  connect_retries: 3            # low-level TCP connect retry attempts (min: 0)
+  reconnect_retries: 3          # reconnection attempts after disconnect (-1 for infinite, max: 10000)
+  reconnect_wait: "2s"          # wait between reconnection attempts (min: 100ms)
+  keep_alive: "30s"             # keep-alive interval for the connection
+  confirmation_timeout: "10s"   # timeout waiting for publish confirmation from broker
 
+# Polling and batch processing settings
 publisher:
-  poll_interval: "1s"
-  batch_size: 100
-  shutdown_timeout: "30s"
+  poll_interval: "1s"       # how often to poll the outbox for pending events
+  batch_size: 100           # max events to fetch per poll cycle
+  shutdown_timeout: "30s"   # max time to wait for current batch to finish on shutdown
 
+# Health check HTTP server settings (K8s probes)
 health:
-  port: 8081
-  health_path: "/health"
-  ready_path: "/ready"
+  port: 8081                # HTTP server port
+  health_path: "/health"    # liveness probe path (always 200 if process is running)
+  ready_path: "/ready"      # readiness probe path (200 if DB + Solace connected, 503 otherwise)
 
+# Logging configuration
 log:
-  level: info
+  level: info               # debug, info, warn, error
 ```
 
 ## Health endpoints
@@ -244,31 +267,87 @@ Configurable shutdown timeout (`publisher.shutdown_timeout`, default 30s). If ti
 
 ## Observability
 
-OpenTelemetry metrics from the start (go-solace-sdk already has OTel support):
+The event-publisher creates a shared `metric.MeterProvider` and passes it to go-solace-sdk via `WithMeterProvider(mp)`. The SDK automatically records its own metrics (`solace.core.*`, `solace.producer.*`) covering connection, publish success/failure, latency, retries, and payload size. The event-publisher adds application-level metrics that the SDK can't provide:
 
-- `events_published_total` — counter by entity_type
-- `events_failed_total` — counter by entity_type
-- `publish_latency_seconds` — histogram per event
-- `poll_batch_size` — histogram of events fetched per poll cycle
+| Metric | Type | Attributes | Description |
+|---|---|---|---|
+| `event_publisher.events_processed_total` | Counter | `entity_type`, `event_type`, `status` | Events processed, segmented by entity (store, product, etc.), event type (created, updated), and outcome (delivered, failed) |
+| `event_publisher.poll_batch_size` | Histogram | — | Number of events fetched per poll cycle |
+| `event_publisher.poll_cycles_total` | Counter | — | Total poll cycles executed (including empty ones) |
 
 ## Dockerfile
 
-Multi-stage build:
+Multi-stage build following the datapipeline pattern (distroless, non-root, versioning, cross-platform).
+
+**Before writing the Dockerfile**, run `docker buildx imagetools inspect gcr.io/distroless/static-debian12:nonroot` to get the current digest and use it in the `FROM` line (e.g. `FROM gcr.io/distroless/static-debian12:nonroot@sha256:<current>`). Add a comment with the pin date.
 
 ```dockerfile
-# Build stage
-FROM golang:1.25-alpine AS build
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 go build -o /eventpublisher ./cmd/eventpublisher
+# Build arguments for versioning and metadata
+ARG VERSION=dev
+ARG COMMIT_SHA=unknown
+ARG BUILD_DATE=unknown
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
 
-# Runtime stage
-FROM alpine:3.21
-RUN apk add --no-cache ca-certificates
-COPY --from=build /eventpublisher /eventpublisher
-ENTRYPOINT ["/eventpublisher"]
+# Builder stage
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION
+ARG COMMIT_SHA
+ARG BUILD_DATE
+
+# Install build dependencies
+RUN apk add --no-cache ca-certificates tzdata
+
+WORKDIR /build
+
+# Copy dependency files first for better layer caching
+COPY go.mod go.sum ./
+RUN go mod download && go mod verify
+
+# Copy source code
+COPY . .
+
+# Build the application with optimizations
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT_SHA} -X main.buildDate=${BUILD_DATE}" \
+    -trimpath \
+    -o eventpublisher \
+    ./cmd/eventpublisher
+
+# Final stage using distroless for minimal attack surface
+# Digest pinned on <DATE>. To update: docker buildx imagetools inspect gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:<pin at implementation time>
+
+# Redeclare build arguments for use in final stage
+ARG VERSION=dev
+ARG COMMIT_SHA=unknown
+ARG BUILD_DATE=unknown
+
+# Copy timezone data and CA certificates from builder
+COPY --from=builder --chown=nonroot:nonroot /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=builder --chown=nonroot:nonroot /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# Copy the binary
+COPY --from=builder --chown=nonroot:nonroot /build/eventpublisher /app/eventpublisher
+
+WORKDIR /app
+
+# Use non-root user (provided by distroless nonroot image)
+USER nonroot:nonroot
+
+# Add labels for metadata (OCI standard)
+LABEL org.opencontainers.image.title="ESL Event Publisher" \
+    org.opencontainers.image.description="Polls outbox table and publishes CDC events to Solace" \
+    org.opencontainers.image.version="${VERSION}" \
+    org.opencontainers.image.created="${BUILD_DATE}" \
+    org.opencontainers.image.source="https://github.com/sonaemc-instore/lac1041-instoreorchestrator_event-publisher" \
+    org.opencontainers.image.revision="${COMMIT_SHA}"
+
+# Run the application
+ENTRYPOINT ["/app/eventpublisher"]
 ```
 
 ## Code quality: golangci-lint
@@ -288,6 +367,8 @@ Follow the same approach as `esl-common`:
 - `install-lint` — install pinned golangci-lint version
 - `run` — build and run locally
 - `docker-build` — build Docker image
+- `mock-gen` — generate mocks via mockery (depends on `install-mockery`)
+- `install-mockery` — install pinned mockery version (v3.6.1)
 
 ## Testing
 
@@ -306,7 +387,7 @@ Follow the same approach as `esl-common`:
 - **testify** for assertions (`require` for fatal, `assert` for non-fatal)
 - **Test naming:** `Test<Function>_<scenario>` (e.g. `TestPublisher_SkipsDeletedEvents`)
 - No test logic in production code (no `if testing` guards)
-- Mocks live alongside the tests that use them, not in shared directories
+- **Mocks:** generated via mockery v3.6.1 (same setup as datapipeline). `.mockery.yml` at project root with explicit interface lists, generated into top-level `mocks/` directory. Testify template, goimports formatter, naming: `{{.InterfaceName | snakecase}}_mock.go`
 
 ### Verification after every change
 
@@ -323,4 +404,7 @@ Both must pass with 0 issues before considering work complete.
 ## Post-implementation
 
 1. Update `README.md` with final documentation (architecture, config, how to run, how to test)
-2. Check whether a new esl-common tag (e.g. `v0.2.0`) should be created and referenced in `go.mod` instead of a commit hash
+2. Create Excalidraw diagrams (exported as SVG) in `esl-documentation/phase-2/diagrams/`, following the Phase 1 convention:
+   - Architecture — CDC pipeline flow (replace ASCII art in `02-architecture.md`)
+   - ER diagram — updated with the `event_outbox` table
+   - Event Publisher flow — poll → transform → publish → update cycle

@@ -556,7 +556,7 @@ c.logger.WithFields(map[string]interface{}{
 #### `docs/postgres-sink.md`
 
 - **Architecture → Component Structure**: Add `cdc.go`, `cdc_test.go`, `cdc_integration_test.go`, `cdc_benchmark_test.go` to file listing
-- **Architecture → Data Flow**: Update diagram to show CDC branch
+- **Architecture → Data Flow**: Update diagram to show CDC branch (Excalidraw → SVG, following Phase 1 convention)
 - **Features → Core Capabilities**: Add CDC bullet point
 - **Configuration**: New "CDC Settings" table documenting `cdc.enabled` (bool, default false)
 - **Write Strategy**: Add "CDC-Enabled Write Strategy" subsection — transactional flow, outbox pattern, error semantics, single-writer assumption

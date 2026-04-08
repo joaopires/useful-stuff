@@ -75,3 +75,10 @@ netpol:
 - `helm lint` across all environments
 - `helm template --show-only templates/eventpublisher-deployment.yaml` renders correctly
 - `helm template --show-only templates/datapipeline-cronjob.yaml` includes CDC config
+
+## Diagrams
+
+Create Excalidraw diagrams (exported as SVG) in `esl-documentation/phase-2/diagrams/`, following the Phase 1 convention:
+
+- K8s environment — all resources (Deployments, CronJobs, Services, ConfigMaps, ExternalSecrets, NetworkPolicies) and how they connect (DB, Solace, Vault)
+- Deployment flow — rollout sequence for the new event-publisher alongside existing components
