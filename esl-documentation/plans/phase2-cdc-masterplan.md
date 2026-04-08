@@ -88,6 +88,7 @@ Connector → Transformer → Sink ──┐
 | 5 | go-solace-sdk (Solace Go client library) | Done (Phases 1-4 + 6a complete — connection, telemetry, producer, integration tests, README; consumer phases 5/6b deferred to ESL Phase 3) |
 | 5b | database migration: add `status` column to outbox | Done (2026-04-06, commit 0fc580c) |
 | 6 | event-publisher | Not started |
+| 6b | refactor: extract shared constants & mappings to esl-common | Not started |
 | 7 | DOCS: data pipeline (CDC additions) | Not started |
 | 8 | DOCS: event publisher | Not started |
 | 9 | k8s helm | Not started |
@@ -143,4 +144,5 @@ Documentation should be written incrementally — each completed scoped plan pro
 - [phase2-cdc-datapipeline.md](phase2-cdc-datapipeline.md) — CDC detection in the sink
 - [go-solace-sdk-implementation.md](/Users/joaopires/Projects/sonae/esl/plans/go-solace-sdk-implementation.md) — Solace Go client library (separate repo)
 - [phase2-cdc-event-publisher.md](phase2-cdc-event-publisher.md) — New publisher service
+- [refactor-extract-shared-constants.md](refactor-extract-shared-constants.md) — Extract entity field names, topic segments, table names, store ID helpers to esl-common
 - [phase2-cdc-k8s-helm.md](phase2-cdc-k8s-helm.md) — Helm chart changes
