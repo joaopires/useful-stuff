@@ -60,7 +60,7 @@ Events are published one by one within the batch. On failure:
 2. The failed event → marked as `FAILED`
 3. Remaining events → stay `PENDING` for next poll
 
-This guarantees **no duplicate publishes** and **no lost events**. The system relies on go-solace-sdk's built-in retry policy (3 attempts, exponential backoff) before considering a publish as failed. No additional outer retry — if the SDK fails, the event is marked `FAILED` immediately.
+This guarantees **at-least-once delivery** and **no lost events**. In rare crash scenarios (process dies mid-batch, between publishing to Solace and committing to PostgreSQL), some events may be re-published on recovery. Consumers deduplicate using the outbox `id` (UUID), which is included as `eventId` in every published event and is deterministic across retries. The system relies on go-solace-sdk's built-in retry policy (3 attempts, exponential backoff) before considering a publish as failed. No additional outer retry — if the SDK fails, the event is marked `FAILED` immediately.
 
 ### Transaction strategy
 
