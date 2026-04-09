@@ -89,7 +89,7 @@ Connector → Transformer → Sink ──┐
 | 5b | database migration: add `status` column to outbox | Done (2026-04-06, commit 0fc580c) |
 | 6 | event-publisher | Done (2026-04-09) |
 | 6b | refactor: outbox UUID primary key (database, datapipeline, event-publisher) | Done (2026-04-09) |
-| 6d | fix: explicit audit timestamps in CDC outbox payload | Not started |
+| 6d | fix: explicit audit timestamps in CDC outbox payload | Done (2026-04-10, commit 94bbd83) |
 | 6c | refactor: extract shared constants & mappings to esl-common | Not started |
 | 7 | DOCS: data pipeline (CDC additions) | Not started |
 | 8 | DOCS: event publisher | Not started |

@@ -2,7 +2,7 @@
 
 **Scope:** `datapipeline` project — explicit audit timestamps for entity/outbox consistency
 **Depends on:** phase2-cdc-datapipeline (4c), refactor-outbox-uuid-primary-key (6b)
-**Status:** Not started
+**Status:** Done (2026-04-10, commit 94bbd83)
 
 ## Problem
 
