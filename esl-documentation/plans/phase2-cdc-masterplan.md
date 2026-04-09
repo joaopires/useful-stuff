@@ -89,6 +89,7 @@ Connector → Transformer → Sink ──┐
 | 5b | database migration: add `status` column to outbox | Done (2026-04-06, commit 0fc580c) |
 | 6 | event-publisher | Done (2026-04-09) |
 | 6b | refactor: outbox UUID primary key (database, datapipeline, event-publisher) | Done (2026-04-09) |
+| 6d | fix: explicit audit timestamps in CDC outbox payload | Not started |
 | 6c | refactor: extract shared constants & mappings to esl-common | Not started |
 | 7 | DOCS: data pipeline (CDC additions) | Not started |
 | 8 | DOCS: event publisher | Not started |
@@ -146,5 +147,6 @@ Documentation should be written incrementally — each completed scoped plan pro
 - [go-solace-sdk-implementation.md](/Users/joaopires/Projects/sonae/esl/plans/go-solace-sdk-implementation.md) — Solace Go client library (separate repo)
 - [phase2-cdc-event-publisher.md](phase2-cdc-event-publisher.md) — New publisher service
 - [refactor-outbox-uuid-primary-key.md](refactor-outbox-uuid-primary-key.md) — Change outbox id from BIGSERIAL to UUID for deterministic eventId and at-least-once deduplication
+- [phase2-cdc-explicit-timestamps.md](phase2-cdc-explicit-timestamps.md) — Explicit audit timestamps for entity/outbox consistency
 - [refactor-extract-shared-constants.md](refactor-extract-shared-constants.md) — Extract entity field names, topic segments, table names, store ID helpers to esl-common
 - [phase2-cdc-k8s-helm.md](phase2-cdc-k8s-helm.md) — Helm chart changes
