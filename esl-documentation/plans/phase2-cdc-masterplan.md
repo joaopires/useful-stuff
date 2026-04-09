@@ -88,7 +88,7 @@ Connector → Transformer → Sink ──┐
 | 5 | go-solace-sdk (Solace Go client library) | Done (Phases 1-4 + 6a complete — connection, telemetry, producer, integration tests, README; consumer phases 5/6b deferred to ESL Phase 3) |
 | 5b | database migration: add `status` column to outbox | Done (2026-04-06, commit 0fc580c) |
 | 6 | event-publisher | Done (2026-04-09) |
-| 6b | refactor: outbox UUID primary key (database, datapipeline, event-publisher) | Not started |
+| 6b | refactor: outbox UUID primary key (database, datapipeline, event-publisher) | Done (2026-04-09) |
 | 6c | refactor: extract shared constants & mappings to esl-common | Not started |
 | 7 | DOCS: data pipeline (CDC additions) | Not started |
 | 8 | DOCS: event publisher | Not started |
