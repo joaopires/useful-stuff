@@ -80,7 +80,7 @@ The outbox row is transformed into a published event before sending to Solace:
 
 1. Generate `eventId` (UUID v4 via `google/uuid`)
 2. Extract `retail_chain_id` from `EntityKey` (used as `insignia` in the topic)
-3. Extract and **split** `store_id` from `EntityKey` — the outbox stores it as `{retail_chain_id}_{store_id}` (e.g. `MC_000010`), split on `_` and take only the second part (`000010`) for both the published event and the topic
+3. Extract and **split** `store_id` from `EntityKey` — the outbox stores it as `{retail_chain_id}.{store_id}` (e.g. `continente_pt.000010`), split on `.` and take only the second part (`000010`) for both the published event and the topic
 4. Merge `EntityKey` fields as top-level keys (with the split `store_id`)
 5. Merge `Payload` fields as top-level keys (all entity-specific data)
 6. Set `send_date` to current time (ISO 8601 / RFC3339)
@@ -401,10 +401,13 @@ Both must pass with 0 issues before considering work complete.
 
 ---
 
-## Post-implementation
+## Post-implementation (this repo)
 
 1. Update `README.md` with final documentation (architecture, config, how to run, how to test)
-2. Create Excalidraw diagrams (exported as SVG) in `esl-documentation/phase-2/diagrams/`, following the Phase 1 convention:
+
+## Post-implementation (esl-documentation — steps 7/8)
+
+1. Create Excalidraw diagrams (exported as SVG) in `esl-documentation/phase-2/diagrams/`, following the Phase 1 convention:
    - Architecture — CDC pipeline flow (replace ASCII art in `02-architecture.md`)
    - ER diagram — updated with the `event_outbox` table
    - Event Publisher flow — poll → transform → publish → update cycle

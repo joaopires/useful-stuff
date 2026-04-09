@@ -65,7 +65,7 @@ var TableName = map[EntityType]string{
 
 ### 4. Composite store ID helpers
 
-The datapipeline builds composite store IDs as `{retail_chain_id}_{store_id}`, and the event-publisher splits them. This format is a shared convention.
+The datapipeline builds composite store IDs as `{retail_chain_id}.{store_id}`, and the event-publisher splits them. This format is a shared convention.
 
 ```go
 // entity/storeid.go
