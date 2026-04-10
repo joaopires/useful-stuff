@@ -6,25 +6,32 @@ Phase 2 adds a single new table — `event_outbox` — to the existing `esl` sch
 
 All existing Phase 1 tables remain unchanged.
 
+![ER Diagram](diagrams/er-diagram.svg)
+
 ## Event Outbox Table
 
 ### event_outbox
 
-Stores CDC events detected during pipeline execution. Each row represents a single CREATED or MODIFIED event for one entity record.
+Stores CDC events detected during pipeline execution. Each row represents a single CREATED or UPDATED event for one entity record.
 
-| Column | Type | Description |
-|---|---|---|
-| `id` | BIGSERIAL | Auto-increment identifier (PK) |
-| `event_type` | VARCHAR(20) | Change type: `CREATED` or `MODIFIED` |
-| `entity_type` | VARCHAR(50) | Entity that changed: `store`, `product`, `label`, `accesspoint` |
-| `entity_key` | JSONB | Composite business key identifying the record (e.g., `{"retail_chain_id": "RC001", "store_id": "S001"}`) |
-| `payload` | JSONB | Event payload — full snapshot for CREATED, changed-field diffs for MODIFIED |
-| `occurred_at` | TIMESTAMPTZ | When the change was detected (defaults to transaction time) |
-| `delivered_at` | TIMESTAMPTZ | When the event was published to Solace (`NULL` = pending delivery) |
+| Column | Type | Default | Description |
+|---|---|---|---|
+| `id` | UUID | `gen_random_uuid()` | Unique event identifier (PK) |
+| `event_type` | VARCHAR(20) | — | Change type: `CREATED` or `UPDATED` |
+| `entity_type` | VARCHAR(50) | — | Entity that changed: `store`, `product`, `label`, `accesspoint` |
+| `entity_key` | JSONB | — | Composite business key identifying the record (e.g., `{"retail_chain_id": "RC001", "store_id": "S001"}`) |
+| `payload` | JSONB | — | Event payload — full snapshot for CREATED, changed-field diffs for UPDATED |
+| `occurred_at` | TIMESTAMPTZ | `NOW()` | When the change was detected (defaults to transaction time) |
+| `status` | TEXT | `'PENDING'` | Delivery status: `PENDING`, `DELIVERED`, or `FAILED` |
+| `delivered_at` | TIMESTAMPTZ | `NULL` | When the event was published to Solace |
 
-**Primary key:** `id` (auto-increment)
+**Primary key:** `id` (UUID, database-generated)
 
-The `delivered_at` column serves as the delivery status marker. A `NULL` value indicates the event is pending; the Event Publisher sets it to the current timestamp after successful publication to Solace.
+**Constraint:** `CHECK (status IN ('PENDING', 'DELIVERED', 'FAILED'))`
+
+The `id` column uses UUIDs rather than sequential integers. This enables deterministic event identifiers that can be included in published messages for downstream deduplication — consumers receiving the same event twice (at-least-once delivery) can use the UUID to discard duplicates.
+
+The `status` column tracks delivery lifecycle explicitly. The Event Publisher transitions events from `PENDING` to `DELIVERED` (with `delivered_at` timestamp) after successful publication, or to `FAILED` for permanent errors. This explicit status model enables straightforward observability — a simple `GROUP BY status` reveals the outbox health at a glance.
 
 ### Payload format
 
@@ -44,11 +51,11 @@ The `delivered_at` column serves as the delivery status marker. A `NULL` value i
 }
 ```
 
-**MODIFIED events** carry only the changed fields, with old and new values:
+**UPDATED events** carry only the changed fields, with old and new values:
 
 ```json
 {
-  "event_type": "MODIFIED",
+  "event_type": "UPDATED",
   "entity_type": "product",
   "entity_key": {"retail_chain_id": "RC001", "store_id": "S001", "item_id": "P001"},
   "payload": {
@@ -73,18 +80,18 @@ Two partial indexes optimise the outbox's two access patterns:
 
 ```sql
 CREATE INDEX idx_event_outbox_pending
-    ON esl.event_outbox (occurred_at) WHERE delivered_at IS NULL;
+    ON esl.event_outbox (occurred_at) WHERE status = 'PENDING';
 
 CREATE INDEX idx_event_outbox_delivered
-    ON esl.event_outbox (delivered_at) WHERE delivered_at IS NOT NULL;
+    ON esl.event_outbox (delivered_at) WHERE status = 'DELIVERED';
 ```
 
 | Index | Purpose |
 |---|---|
-| `idx_event_outbox_pending` | Event Publisher queries: `SELECT ... WHERE delivered_at IS NULL ORDER BY occurred_at` |
-| `idx_event_outbox_delivered` | Retention cleanup: `DELETE ... WHERE delivered_at IS NOT NULL AND delivered_at < threshold` |
+| `idx_event_outbox_pending` | Event Publisher queries: `SELECT ... WHERE status = 'PENDING' ORDER BY occurred_at` |
+| `idx_event_outbox_delivered` | Retention cleanup: `DELETE ... WHERE status = 'DELIVERED' AND delivered_at < threshold` |
 
-Partial indexes keep each index small — the pending index only covers undelivered rows, and the delivered index only covers published rows. As events are delivered, they move from one index to the other.
+Partial indexes keep each index small — the pending index only covers rows awaiting delivery, and the delivered index only covers published rows. As events transition from `PENDING` to `DELIVERED`, they move from one index to the other.
 
 ## Retention
 
@@ -96,16 +103,16 @@ RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE deleted BIGINT;
 BEGIN
     DELETE FROM esl.event_outbox
-    WHERE delivered_at IS NOT NULL
+    WHERE status = 'DELIVERED'
       AND delivered_at < NOW() - (retention_days || ' days')::INTERVAL;
     GET DIAGNOSTICS deleted = ROW_COUNT;
     RETURN deleted;
 END; $$;
 ```
 
-The function deletes outbox rows that have been delivered more than `retention_days` ago (default: 7 days) and returns the number of deleted rows. It is designed to be called externally — by `pg_cron`, the Event Publisher, or an application-level scheduler.
+The function deletes outbox rows with status `DELIVERED` that were published more than `retention_days` ago (default: 7 days) and returns the number of deleted rows. It is designed to be called externally — by `pg_cron`, the Event Publisher, or an application-level scheduler.
 
-Only delivered events are eligible for cleanup. Undelivered events (`delivered_at IS NULL`) are never deleted, regardless of age, to prevent data loss.
+Only delivered events are eligible for cleanup. Events with status `PENDING` or `FAILED` are never deleted, regardless of age, to prevent data loss.
 
 ## Migrations
 
@@ -127,9 +134,17 @@ All entity types share one `event_outbox` table rather than having per-entity ou
 
 Both `entity_key` and `payload` use JSONB rather than typed columns. This accommodates the varying composite key structures across entity types (2-column key for stores, 3-column key for products) and the variable shape of diff payloads without requiring schema changes.
 
+### UUID primary key over sequential integer
+
+A UUID primary key (`gen_random_uuid()`) was chosen over `BIGSERIAL` to provide deterministic event identifiers. The UUID is included in the published Solace message, enabling downstream consumers to deduplicate events under at-least-once delivery semantics — if the Event Publisher crashes after publishing but before marking the row as `DELIVERED`, the same event may be published again on restart, and consumers can detect the duplicate by its UUID.
+
+### Explicit status column over NULL-based tracking
+
+An explicit `status` column (`PENDING` → `DELIVERED` / `FAILED`) was chosen over using `delivered_at IS NULL` as the delivery indicator. The explicit model provides clearer semantics, enables a `FAILED` state for permanent errors, and simplifies observability — `SELECT status, COUNT(*) FROM event_outbox GROUP BY status` gives a complete health snapshot.
+
 ### Partial indexes over full indexes
 
-Full indexes on `occurred_at` or `delivered_at` would include all rows. Partial indexes are more efficient because the outbox has a natural lifecycle: rows start as pending (matched by the pending index) and transition to delivered (matched by the delivered index), then are eventually deleted by the retention function.
+Full indexes on `occurred_at` or `delivered_at` would include all rows. Partial indexes are more efficient because the outbox has a natural lifecycle: rows start as `PENDING` (matched by the pending index) and transition to `DELIVERED` (matched by the delivered index), then are eventually deleted by the retention function.
 
 ### Retention via function, not trigger
 

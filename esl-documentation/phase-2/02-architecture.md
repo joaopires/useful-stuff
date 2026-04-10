@@ -8,46 +8,7 @@ The CDC pipeline uses the **transactional outbox pattern**: change events are wr
 
 ## Architecture
 
-```
-                     Phase 1 (unchanged)
-                     ─────────────────────────────────────
-                     Vusion Manager / VLink APIs
-                                  │
-                                  ▼
-                     ┌──────────────────────┐
-                     │     Data Pipeline    │  K8s CronJob
-                     │  Connector → Sink    │
-                     └──────────┬───────────┘
-                                │
-             ┌──────────────────┼──────────────────┐
-             │           PostgreSQL                 │
-             │  ┌────────────┐  ┌────────────────┐  │
-             │  │  Entity    │  │  event_outbox   │  │  ← same transaction
-             │  │  tables    │  │  (CDC events)   │  │
-             │  └────────────┘  └───────┬────────┘  │
-             │                          │           │
-             └──────────────────────────┼───────────┘
-                     │                  │
-                     ▼                  ▼
-          ┌──────────────────┐  ┌───────────────────┐
-          │   DataFetch API  │  │  Event Publisher   │  K8s Deployment
-          │   (Phase 1)      │  │  (Phase 2)         │
-          └──────────────────┘  └─────────┬─────────┘
-                                          │
-                                          ▼
-                                    Solace Broker
-                                 esl/events/{entity}
-                                          │
-                                          ▼
-                                  Downstream consumers
-
-             ┌──────────────────────────────────────┐
-             │          esl-common (shared)          │
-             │  event/types.go   entity/keys.go      │
-             │  Used by: Data Pipeline,              │
-             │           Event Publisher              │
-             └──────────────────────────────────────┘
-```
+![Phase 2 Architecture](diagrams/architecture.svg)
 
 ## CDC Data Flow
 
@@ -56,7 +17,7 @@ The CDC data flow adds three steps to the existing upsert path:
 1. **Pre-fetch** — Before upserting a batch, the sink queries the current state of the target rows within a database transaction
 2. **Classify** — Each incoming record is compared against the pre-fetched state:
    - Key not found → **CREATED** (payload: full record snapshot)
-   - Key found, fields differ → **MODIFIED** (payload: changed fields as old/new diffs)
+   - Key found, fields differ → **UPDATED** (payload: changed fields as old/new diffs)
    - Key found, identical → no event
 3. **Outbox write** — Detected change events are inserted into `esl.event_outbox` within the same transaction as the upsert batch
 4. **Publish** — The Event Publisher polls undelivered outbox rows, publishes each to Solace, and marks them as delivered
@@ -87,7 +48,7 @@ The `esl-common` module provides types and definitions shared between the Data P
 type ChangeType string
 const (
     ChangeTypeCreated  ChangeType = "CREATED"
-    ChangeTypeModified ChangeType = "MODIFIED"
+    ChangeTypeUpdated ChangeType = "UPDATED"
 )
 
 type ChangeEvent struct {
@@ -128,7 +89,7 @@ Database-level triggers (e.g., `LISTEN/NOTIFY` or logical replication) were cons
 
 ### Pre-fetch and in-Go classification
 
-Detecting changes requires knowing the previous state of each record. Since MODIFIED events carry a diff payload (`{"field": {"old": X, "new": Y}}`), pre-fetching the current rows is mandatory. Given that pre-fetch is already needed, classification (CREATED vs MODIFIED vs unchanged) is performed in Go at negligible additional cost.
+Detecting changes requires knowing the previous state of each record. Since UPDATED events carry a diff payload (`{"field": {"old": X, "new": Y}}`), pre-fetching the current rows is mandatory. Given that pre-fetch is already needed, classification (CREATED vs UPDATED vs unchanged) is performed in Go at negligible additional cost.
 
 ### Separate publisher service
 

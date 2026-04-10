@@ -1,0 +1,304 @@
+# Data Pipeline — CDC
+
+## Overview
+
+Phase 2 adds Change Data Capture (CDC) to the Data Pipeline's PostgreSQL sink. When enabled, the sink detects CREATED and UPDATED records during each batch write and inserts corresponding change events into the `event_outbox` table — atomically, within the same database transaction as the upserts.
+
+The CDC logic is encapsulated in a dedicated `CDC` struct that the sink delegates to. When CDC is disabled (the default), the sink behaves exactly as in Phase 1 — no transaction wrapper, no pre-fetch, no outbox writes.
+
+## Feature Flag
+
+CDC is gated behind a single configuration flag:
+
+```yaml
+sink:
+  postgres:
+    cdc:
+      enabled: false   # default
+```
+
+When `cdc.enabled` is `false`, the sink dispatches batches through the original non-transactional path. When `true`, the sink wraps each batch in a transaction and delegates change detection and outbox writes to the CDC module.
+
+The flag is evaluated once at startup in the sink builder — the `CDC` struct is only instantiated when enabled. At runtime, the dispatch check is a nil pointer comparison (`s.cdc != nil`), not a config lookup.
+
+## Architecture
+
+All CDC logic lives in a single file (`internal/sink/postgres/cdc.go`) as an encapsulated struct with two public methods. The sink orchestrates the transaction and delegates each phase:
+
+```
+                         executeBatchWithCDC
+                         ───────────────────
+                                │
+              ┌─────────────────┼──────────────────┐
+              │            BEGIN (tx)               │
+              │                 │                   │
+              │    Phase 1: DetectChanges           │
+              │    ├── groupByEntityType            │
+              │    ├── buildFetchQuery (SELECT)     │
+              │    ├── tx.Query (fetch existing)    │
+              │    └── classifyAndDiff              │
+              │                 │                   │
+              │    Phase 2: Upsert                  │
+              │    ├── buildUpsertBatch             │
+              │    ├── tx.SendBatch                 │
+              │    └── sendAndProcessBatch          │
+              │                 │                   │
+              │    Phase 3: WriteOutbox             │
+              │    ├── buildOutboxInsert            │
+              │    └── tx.Exec                      │
+              │                 │                   │
+              │            COMMIT                   │
+              └─────────────────────────────────────┘
+```
+
+### CDC Struct
+
+```go
+type CDC struct {
+    logger  *logger.Logger
+    metrics *telemetry.Metrics
+}
+```
+
+The struct holds no schema reference — the outbox table name is unqualified (the search path handles schema resolution). It exposes two methods:
+
+- **`DetectChanges`** — fetches existing state within the transaction, classifies each record, and returns a slice of `event.ChangeEvent`
+- **`WriteOutbox`** — inserts change events into the outbox within the same transaction
+
+### Shared Helpers
+
+Two functions were extracted from the original `executeBatch` to avoid duplication between the CDC and non-CDC paths:
+
+| Helper | Purpose |
+|---|---|
+| `buildUpsertBatch` | Builds a `pgx.Batch` with upsert queries for all records |
+| `sendAndProcessBatch` | Processes batch results from any sender (pool or transaction), with a `failFast` parameter controlling error strategy |
+
+The non-CDC path calls these with `failFast=false` (collect all failures). The CDC path calls them with `failFast=true` (return on first error, enabling clean rollback).
+
+## Change Detection
+
+### Step 1 — Group by Entity Type
+
+Records in a batch may belong to different entity types (stores, products, labels, access points). The first step groups them using the `type` field from record metadata:
+
+```go
+type entityGroup struct {
+    tableName    string
+    conflictKeys []string
+    records      []*models.Record
+}
+```
+
+Conflict keys come from `entity.ConflictKeys` in esl-common — the single source of truth for entity business keys. Records whose entity type is not present in `entity.ConflictKeys` are silently skipped (no business key definition means CDC cannot build a meaningful event).
+
+### Step 2 — Fetch Existing State
+
+For each entity group, CDC builds a SELECT query that fetches the current row values for all records in the group:
+
+```sql
+SELECT "name"::TEXT, "price"::TEXT, "status"::TEXT, ...
+FROM esl.products
+WHERE ("retail_chain_id", "store_id", "item_id") IN (($1,$2,$3), ($4,$5,$6), ...)
+```
+
+Key aspects:
+
+- **Explicit column list** — derived from the incoming record's `RawData` keys. No `SELECT *` — only columns being upserted are fetched, avoiding false diffs from database-only columns.
+- **`::TEXT` casting** — all values are cast to TEXT to avoid Go type mismatches (e.g., `int32` vs `float64`, `time.Time` vs `string`). Both sides are normalised to strings for comparison.
+- **Single round-trip** — one batched SELECT per entity type, using a composite `IN` clause.
+
+The query runs within the transaction. Under READ COMMITTED isolation (the PostgreSQL default), this is safe because the Data Pipeline is the sole writer to entity tables — no concurrent modifications can occur between the SELECT and the subsequent upsert.
+
+### Step 3 — Classify and Diff
+
+Each incoming record is compared against the pre-fetched existing state:
+
+| Condition | Event | Payload |
+|---|---|---|
+| Key not found in existing rows | **CREATED** | All non-key fields (full snapshot) |
+| Key found, business fields differ | **UPDATED** | Only changed fields as `{"old": X, "new": Y}` diffs |
+| Key found, all fields identical | No event | — |
+
+#### Column handling
+
+| Column category | Compared? | CREATED payload | UPDATED payload |
+|---|---|---|---|
+| Conflict keys (e.g., `store_id`) | No | No (in `entity_key`) | No (in `entity_key`) |
+| Audit columns (`created_at`, `last_updated_at`) | No | Yes (flat value) | Yes (flat value, not diffed) |
+| Business fields | Yes | Yes | Only changed fields |
+
+Audit columns are excluded from comparison because they change on every upsert. However, they are included in the event payload: CREATED events carry both timestamps, and UPDATED events include `created_at` (from the existing row) and `last_updated_at` (from the incoming batch) as flat values — not as old/new diffs.
+
+#### Value normalisation
+
+Both sides (incoming `RawData` values and database TEXT values) are normalised to strings before comparison:
+
+| Go type | Normalised form |
+|---|---|
+| `string` | As-is |
+| `float64` | Formatted as number; trailing `.0` stripped for whole numbers |
+| `bool` | `"true"` / `"false"` |
+| `nil` | `"<nil>"` |
+| `[]any` | Sorted, JSON-marshalled |
+| Timestamps | Parsed and normalised (RFC3339, RFC3339Nano, and Postgres TEXT formats are all equivalent) |
+| Postgres arrays | Parsed, sorted, and normalised to a canonical form |
+
+This normalisation ensures that semantically equal values are never flagged as changes — for example, a Postgres TEXT timestamp `2024-10-04 08:31:38.879+00` matches an incoming RFC3339 value `2024-10-04T08:31:38.879Z`.
+
+#### Timestamp handling in payloads
+
+Values included in event payloads go through a separate normalisation step (`normalizePayloadValue`) that converts Postgres TEXT timestamps to `time.Time` values. When JSON-marshalled for the outbox, these become RFC3339 format — ensuring a consistent representation in published events regardless of how timestamps were originally stored in the database.
+
+## Outbox Write
+
+If any changes were detected, CDC builds a single multi-row INSERT:
+
+```sql
+INSERT INTO event_outbox (event_type, entity_type, entity_key, payload, occurred_at)
+VALUES ($1,$2,$3,$4,$5), ($6,$7,$8,$9,$10), ...
+```
+
+The `entity_key` and `payload` fields are JSON-marshalled before insertion. The `occurred_at` timestamp is the batch timestamp — a deterministic value set once per batch and injected into all records, ensuring the outbox event and the upserted row share the same audit timestamp.
+
+The `id` (UUID), `status` (`PENDING`), and `delivered_at` (`NULL`) columns use their database defaults.
+
+## Transaction Flow
+
+The complete CDC batch execution:
+
+```
+BEGIN (READ COMMITTED)
+│
+├── Phase 1: DetectChanges
+│   ├── SELECT existing rows (1 query per entity type)
+│   └── Classify: CREATED / UPDATED / unchanged
+│
+├── Phase 2: Upsert
+│   ├── Build pgx.Batch (1 upsert per record)
+│   ├── tx.SendBatch → process results (fail-fast)
+│   └── On error: ROLLBACK, return failure
+│
+├── Phase 3: WriteOutbox (only if changes detected)
+│   ├── INSERT INTO event_outbox (multi-row)
+│   └── On error: ROLLBACK, return failure
+│
+└── COMMIT
+```
+
+The transaction guarantees atomicity — if any phase fails, all upserts and outbox writes are rolled back. A record is never persisted without its corresponding change event, and a change event is never written without its corresponding data change.
+
+### Single-writer assumption
+
+The pipeline uses READ COMMITTED isolation (PostgreSQL default). This is safe because the Data Pipeline is the sole writer to entity tables. No concurrent modifications can occur between the SELECT (Phase 1) and the upsert (Phase 2), so the pre-fetched state is always current.
+
+If another service starts writing to entity tables in the future, this assumption must be revisited — SERIALIZABLE isolation or explicit row-level locking would be needed to prevent missed diffs.
+
+## Performance
+
+### Network round-trips
+
+| Path | Round-trips | Description |
+|---|---|---|
+| Non-CDC | 1 | `pool.SendBatch` (auto-commit) |
+| CDC | 4–5 | BEGIN → SELECT → upsert batch → outbox INSERT → COMMIT |
+
+The CDC path adds 3–4 round-trips. On a LAN connection, this translates to approximately 0.1ms per additional round-trip. An earlier design combined SELECT and upserts into a single `SendBatch` call to save one round-trip, but this was dropped — the coupling violated single responsibility and saved only ~0.1ms, not worth the complexity.
+
+### Measured overhead
+
+Benchmarks against a real PostgreSQL container (batch sizes 10–500):
+
+| Scenario | Overhead vs non-CDC |
+|---|---|
+| All unchanged (best case) | ~30% — SELECT only, no outbox write |
+| Mixed (10% changed) | ~50% |
+| All new (worst case) | ~100% — every record produces a CREATED event |
+
+At `batch_size=500` (the production default), the worst case adds approximately 4 seconds to a full 240k-record sync. This is acceptable for the current workload profile.
+
+If CDC overhead becomes a bottleneck, the following optimisations are available:
+- Lower batch size to 200–300 (reduces per-batch transaction scope)
+- Chunk outbox INSERTs for very large batches
+- Switch to COPY for bulk outbox loading
+
+## Error Handling
+
+### Fail-fast semantics
+
+Unlike the non-CDC path (which collects all failures and continues), the CDC path fails fast on the first error. This is required because partial upserts combined with partial outbox writes would be invalid — the transaction must be all-or-nothing.
+
+When a batch fails:
+
+1. The transaction is rolled back (no upserts, no outbox writes)
+2. A single `recordFailure` is returned containing the first failing record
+3. The error is propagated via `Ack(err)` to all records in the batch
+4. The retry mechanism re-attempts the entire batch (up to `max_retries`)
+
+### Error classification
+
+The same error classification from Phase 1 applies:
+
+| Type | Action |
+|---|---|
+| **Transient** (deadlock, serialisation, system errors) | Retried with exponential backoff |
+| **Permanent** (constraint violations, syntax errors) | Stored in `records_with_errors`, not retried |
+
+## Observability
+
+### Metrics
+
+| Metric | Type | Description |
+|---|---|---|
+| `sink.cdc.events` (attribute: `event_type=CREATED`) | Counter | Number of CREATED events detected |
+| `sink.cdc.events` (attribute: `event_type=UPDATED`) | Counter | Number of UPDATED events detected |
+| `sink.cdc.detect_duration_ms` | Histogram | Time spent in change detection (SELECT + classify) |
+| `sink.cdc.outbox_duration_ms` | Histogram | Time spent writing to the outbox |
+
+All metrics include the `sink.type=postgres` attribute and are prefixed with `eslorchestrator.` in the OTel exporter.
+
+### Logging
+
+**Change detection** (INFO level):
+
+```json
+{
+  "msg": "CDC change detection completed",
+  "batch_size": 100,
+  "cdc_created": 3,
+  "cdc_updated": 7,
+  "cdc_unchanged": 90,
+  "cdc_fetch_ms": 12
+}
+```
+
+**Outbox write** (DEBUG level):
+
+```json
+{
+  "msg": "CDC outbox write",
+  "event_count": 10,
+  "cdc_outbox_ms": 2
+}
+```
+
+## Configuration Reference
+
+CDC adds a single configuration block under `sink.postgres`:
+
+```yaml
+sink:
+  postgres:
+    # ... existing connection and batching settings ...
+
+    cdc:
+      enabled: true   # Enable CDC change detection and outbox writes
+```
+
+No additional CDC-specific settings are needed. The outbox table must exist in the database (see [Database](03-database.md) migrations V1.0.0.15–17).
+
+## Known Limitations
+
+### No DELETED event detection
+
+Phase 2 only detects CREATED and UPDATED changes. DELETED event detection is deferred to a future iteration. The `ChangeTypeDeleted` constant is defined in esl-common but not used by the CDC logic.

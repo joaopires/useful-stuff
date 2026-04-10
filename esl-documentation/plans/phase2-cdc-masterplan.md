@@ -91,8 +91,8 @@ Connector → Transformer → Sink ──┐
 | 6b | refactor: outbox UUID primary key (database, datapipeline, event-publisher) | Done (2026-04-09) |
 | 6d | fix: explicit audit timestamps in CDC outbox payload | Done (2026-04-10, commit 94bbd83) |
 | 6c | refactor: extract shared constants & mappings to esl-common | Not started |
-| 7 | DOCS: data pipeline (CDC additions) | Not started |
-| 8 | DOCS: event publisher | Not started |
+| 7 | DOCS: data pipeline (CDC additions) | Done (2026-04-10) |
+| 8 | DOCS: event publisher | Done (2026-04-10) |
 | 9 | k8s helm | Not started |
 | 10 | DOCS: deployment, operations | Not started |
 

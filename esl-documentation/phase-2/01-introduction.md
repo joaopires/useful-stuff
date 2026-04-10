@@ -46,8 +46,8 @@ The document is structured in the following order:
 
 1. **System Architecture** — Updated high-level view showing how CDC fits into the existing platform
 2. **Database** — Event outbox table, indexes, and retention
-3. **Data Pipeline** — CDC detection logic in the sink *(to be added)*
-4. **Event Publisher** — Outbox polling and Solace publishing *(to be added)*
+3. **Data Pipeline** — CDC detection logic in the sink
+4. **Event Publisher** — Outbox polling and Solace publishing
 5. **Deployment & Infrastructure** — Helm chart changes for the new components *(to be added)*
 6. **Operations & Maintenance** — Monitoring, outbox management, and troubleshooting *(to be added)*
 
@@ -63,6 +63,6 @@ Terms introduced in Phase 1 still apply. The following terms are new in Phase 2:
 | **Solace** | Message broker used for event distribution to downstream consumers |
 | **Outbox** | The `event_outbox` table that acts as a reliable buffer between change detection and event publishing |
 | **CREATED event** | Event emitted when a record is inserted for the first time; payload contains the full record snapshot |
-| **MODIFIED event** | Event emitted when an existing record's non-audit fields change; payload contains only the changed fields as `{"field": {"old": X, "new": Y}}` diffs |
+| **UPDATED event** | Event emitted when an existing record's non-audit fields change; payload contains only the changed fields as `{"field": {"old": X, "new": Y}}` diffs |
 | **Entity key** | Composite business key that uniquely identifies a record (e.g., `retail_chain_id + store_id` for stores) |
 | **esl-common** | Shared Go library providing CDC types and entity definitions used by multiple components |

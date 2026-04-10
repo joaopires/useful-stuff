@@ -15,7 +15,8 @@ P1_PDF     := $(P1_DIR)/esl-orchestrator-documentation-phase1.pdf
 P2_DIR     := phase-2
 P2_SVG     := $(wildcard $(P2_DIR)/diagrams/*.svg)
 P2_MD      := $(P2_DIR)/01-introduction.md $(P2_DIR)/02-architecture.md \
-              $(P2_DIR)/03-database.md
+              $(P2_DIR)/03-database.md $(P2_DIR)/04-datapipeline.md \
+              $(P2_DIR)/05-event-publisher.md
 P2_PDF     := $(P2_DIR)/esl-orchestrator-documentation-phase2.pdf
 
 .PHONY: all phase-1 phase-2 clean
