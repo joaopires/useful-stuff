@@ -72,9 +72,30 @@ netpol:
 
 ## Verification
 
-- `helm lint` across all environments
-- `helm template --show-only templates/eventpublisher-deployment.yaml` renders correctly
+- `helm template --show-only templates/eventpublisher-deployment.yaml` renders correctly (no missing required values)
 - `helm template --show-only templates/datapipeline-cronjob.yaml` includes CDC config
+
+### Solace Cloud networking
+
+The client uses Solace Cloud (SaaS). Connection is via an in-cluster gateway pod provided by Solace, not direct internet egress. NetworkPolicy egress is modelled as a `podsSelector` rule targeting `namespace: solace-cloud`, labels `app: solace`, port `55443` (TLS SMF) — the same pattern used by other projects in this cluster. No CIDR placeholder is needed.
+
+### Deferred items — requires real operational values
+
+`helm lint` is clean with the placeholders below. `kubectl apply` / ArgoCD will still fail on the cluster until these are replaced:
+
+| Placeholder | Location | Needed from | Failure mode |
+|---|---|---|---|
+| `eventPublisher.imageTag: "<TBD>"` / `"placeholder"` | `values-{env}.yaml` | Built + pushed image tag | Pod ImagePullBackOff |
+| Vault entries at `{vaultBasePath}/solace` (host, vpn, username, password) | External Vault | Ops / credentials owner | ExternalSecret reconcile fails, Secret never materializes, Deployment stuck |
+| `solace-cloud` namespace / `app: solace` gateway pod | Cluster-level infra | Solace Cloud deployment (pre-existing in pp/prd clusters) | NetworkPolicy is valid but egress has no target |
+
+When real values land:
+
+1. Replace imageTag placeholders across all 3 env files
+2. Ensure Vault `{vaultBasePath}/solace` entries exist
+3. Re-run `helm lint` across all clusters (loop from k8s CLAUDE.md) — should still be 0 errors
+4. `helm template` + diff against `kubectl apply --dry-run=server` to catch API-level validation
+5. Flip `dataPipeline.config.cdc.enabled` to `true` per env once the publisher is verified
 
 ## Diagrams
 
