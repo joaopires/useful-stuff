@@ -87,7 +87,7 @@ For each fetched row:
 2. **Publish** — Send to Solace with persistent confirmed delivery
 3. **Track outcome** — Collect the row ID into a delivered or failed list
 
-Processing continues even if individual rows fail. Transform errors (unsupported entity type, malformed store ID) and publish errors (Solace unreachable, confirmation timeout) both result in the row being marked as `FAILED`, but do not affect other rows in the batch.
+Processing continues even if individual rows fail. Transform errors (unsupported entity type, missing key fields) and publish errors (Solace unreachable, confirmation timeout) both result in the row being marked as `FAILED`, but do not affect other rows in the batch.
 
 ### 4. Mark outcomes
 
@@ -108,15 +108,11 @@ The transform step converts an outbox `ChangeEvent` into a flat JSON payload and
 
 ### Payload assembly
 
-1. **Start with entity key fields** — `retail_chain_id`, `store_id` (split — see below), and any additional conflict keys (`item_id`, `label_id`, `id`)
+1. **Start with entity key fields** — `retail_chain_id`, `store_id`, and any additional conflict keys (`item_id`, `label_id`, `id`)
 2. **Merge payload fields** — For CREATED events, the payload is already flat. For UPDATED events, diff objects `{"old": X, "new": Y}` are flattened to extract only the `"new"` value. Audit columns (`created_at`, `last_updated_at`) pass through as-is (they are already flat values, not diffs).
 3. **Add metadata** — `eventId` (the outbox row UUID) and `send_date` (current time in RFC3339)
 
 The result is a flat JSON object regardless of event type. Downstream consumers distinguish between creation and update events via the Solace topic, not the payload structure.
-
-### Store ID splitting
-
-The outbox stores composite store IDs in the format `{retail_chain_id}.{store_id}` (e.g., `continente_pt.000010`). The transform step splits on the dot and extracts only the store portion (`000010`) for both the published payload and the topic.
 
 ### Example published event
 
@@ -149,7 +145,7 @@ in-store/orchestratoresl/{entitySegment}/{messageType}/v1/{insignia}/{storeId}
 | `{entitySegment}` | Static mapping from entity type (see table below) |
 | `{messageType}` | Event type lowercased: `created`, `updated` |
 | `{insignia}` | `retail_chain_id` from `entity_key` |
-| `{storeId}` | `store_id` from `entity_key` (split, store portion only) |
+| `{storeId}` | `store_id` from `entity_key` |
 
 **Entity type to topic segment mapping:**
 

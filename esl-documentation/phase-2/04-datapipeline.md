@@ -6,6 +6,19 @@ Phase 2 adds Change Data Capture (CDC) to the Data Pipeline's PostgreSQL sink. W
 
 The CDC logic is encapsulated in a dedicated `CDC` struct that the sink delegates to. When CDC is disabled (the default), the sink behaves exactly as in Phase 1 — no transaction wrapper, no pre-fetch, no outbox writes.
 
+## Data Normalization
+
+The Vusion API returns composite store IDs in the format `{retail_chain_id}.{store_id}` (e.g., `continente_pt.000010`). In Phase 1, these composites were stored as-is in the `store_id` column — redundant, since `retail_chain_id` is already a separate column.
+
+In Phase 2, the connector strips the retail chain prefix at ingestion before building records. Only the store portion (`000010`) is persisted. The composite value is retained internally for VLink API URL paths (`/stores/{composite}/productLabelling/products`), which require it, but never leaves the connector layer.
+
+Database migration **V1.0.0.15** performs a one-time fix-up:
+
+- Strips the `{chain}.` prefix from existing `store_id` values in all entity tables (`stores`, `products`, `labels`, `access_points`) and in `event_outbox.entity_key`
+- Adds `retail_chain_id` to `esl.store_sync_state` (previously keyed on `store_id` alone)
+
+The `retail_chain_id` addition to `store_sync_state` prevents cross-chain collisions: with composite IDs stripped, two retail chains sharing the same store code (`000010`) would otherwise overwrite each other's sync timestamps. Sync state is now tracked per `(retail_chain_id, store_id)` pair.
+
 ## Feature Flag
 
 CDC is gated behind a single configuration flag:

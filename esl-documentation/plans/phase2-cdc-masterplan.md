@@ -90,7 +90,8 @@ Connector → Transformer → Sink ──┐
 | 6 | event-publisher | Done (2026-04-09) |
 | 6b | refactor: outbox UUID primary key (database, datapipeline, event-publisher) | Done (2026-04-09) |
 | 6d | fix: explicit audit timestamps in CDC outbox payload | Done (2026-04-10, commit 94bbd83) |
-| 6c | refactor: extract shared constants & mappings to esl-common | Not started |
+| 6c | refactor: extract shared constants & fix composite store IDs | Done (2026-04-15) |
+| 6e | fix: add retail_chain_id to store_sync_state | Done (2026-04-10) |
 | 7 | DOCS: data pipeline (CDC additions) | Done (2026-04-10) |
 | 8 | DOCS: event publisher | Done (2026-04-10) |
 | 9 | k8s helm | Not started |
@@ -148,5 +149,6 @@ Documentation should be written incrementally — each completed scoped plan pro
 - [phase2-cdc-event-publisher.md](phase2-cdc-event-publisher.md) — New publisher service
 - [refactor-outbox-uuid-primary-key.md](refactor-outbox-uuid-primary-key.md) — Change outbox id from BIGSERIAL to UUID for deterministic eventId and at-least-once deduplication
 - [phase2-cdc-explicit-timestamps.md](phase2-cdc-explicit-timestamps.md) — Explicit audit timestamps for entity/outbox consistency
-- [refactor-extract-shared-constants.md](refactor-extract-shared-constants.md) — Extract entity field names, topic segments, table names, store ID helpers to esl-common
+- [refactor-extract-shared-constants.md](refactor-extract-shared-constants.md) — Extract entity field names + fix composite store IDs
+- [fix-store-sync-state-retail-chain.md](fix-store-sync-state-retail-chain.md) — Add retail_chain_id to store_sync_state (required after store ID stripping)
 - [phase2-cdc-k8s-helm.md](phase2-cdc-k8s-helm.md) — Helm chart changes
