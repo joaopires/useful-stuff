@@ -94,8 +94,8 @@ Connector → Transformer → Sink ──┐
 | 6e | fix: add retail_chain_id to store_sync_state | Done (2026-04-10) |
 | 7 | DOCS: data pipeline (CDC additions) | Done (2026-04-10) |
 | 8 | DOCS: event publisher | Done (2026-04-10) |
-| 9 | k8s helm | Not started |
-| 10 | DOCS: deployment, operations | Not started |
+| 9 | k8s helm | PR open (2026-04-15, k8s PR #30) |
+| 10 | DOCS: deployment, operations | Done (2026-04-15) |
 
 ## Documentation
 

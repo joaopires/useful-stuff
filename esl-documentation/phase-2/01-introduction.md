@@ -27,7 +27,7 @@ Phase 2 delivers three new components and modifies one existing component:
 
 ## Scope
 
-This document covers the architecture, design, and database changes introduced by Phase 2. Sections on the Data Pipeline CDC logic, Event Publisher service, deployment, and operations will be added incrementally as those components are implemented.
+This document covers the full Phase 2 scope: architecture, database changes, Data Pipeline CDC logic, Event Publisher service, deployment, and operations.
 
 DELETED event detection is deferred to a future iteration.
 
@@ -48,8 +48,8 @@ The document is structured in the following order:
 2. **Database** — Event outbox table, indexes, and retention
 3. **Data Pipeline** — CDC detection logic in the sink
 4. **Event Publisher** — Outbox polling and Solace publishing
-5. **Deployment & Infrastructure** — Helm chart changes for the new components *(to be added)*
-6. **Operations & Maintenance** — Monitoring, outbox management, and troubleshooting *(to be added)*
+5. **Deployment & Infrastructure** — Helm chart changes for the new components
+6. **Operations & Maintenance** — Monitoring, outbox management, and troubleshooting
 
 ## Glossary
 
