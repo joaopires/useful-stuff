@@ -96,6 +96,7 @@ Connector → Transformer → Sink ──┐
 | 8 | DOCS: event publisher | Done (2026-04-10) |
 | 9 | k8s helm | PR open (2026-04-15, k8s PR #30) |
 | 10 | DOCS: deployment, operations | Done (2026-04-15) |
+| 11 | DELETED event detection (pulled forward from Phase 3) | Planning (2026-04-16) |
 
 ## Documentation
 
@@ -152,3 +153,4 @@ Documentation should be written incrementally — each completed scoped plan pro
 - [refactor-extract-shared-constants.md](refactor-extract-shared-constants.md) — Extract entity field names + fix composite store IDs
 - [fix-store-sync-state-retail-chain.md](fix-store-sync-state-retail-chain.md) — Add retail_chain_id to store_sync_state (required after store ID stripping)
 - [phase2-cdc-k8s-helm.md](phase2-cdc-k8s-helm.md) — Helm chart changes
+- [phase2-cdc-deleted-detection.md](phase2-cdc-deleted-detection.md) — DELETED event detection for products + labels via Vusion `deleted=true` flag, soft-delete (`deletion_date` + `deleted_at`)
