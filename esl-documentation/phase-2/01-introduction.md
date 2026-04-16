@@ -14,7 +14,7 @@ lang: "en"
 
 ## Purpose
 
-This document provides the technical documentation for **Phase 2** of the ESL Orchestrator platform at Sonae MC. Building on the data synchronisation pipeline established in Phase 1, Phase 2 adds **Change Data Capture (CDC)** — the ability to detect when entity records are created or modified during each pipeline execution and publish those changes as events to a Solace message broker.
+This document provides the technical documentation for **Phase 2** of the ESL Orchestrator platform at Sonae MC. Building on the data synchronisation pipeline established in Phase 1, Phase 2 adds **Change Data Capture (CDC)** — the ability to detect when entity records are created, modified, or deleted during each pipeline execution and publish those changes as events to a Solace message broker.
 
 Phase 2 delivers three new components and modifies one existing component:
 
@@ -29,7 +29,7 @@ Phase 2 delivers three new components and modifies one existing component:
 
 This document covers the full Phase 2 scope: architecture, database changes, Data Pipeline CDC logic, Event Publisher service, deployment, and operations.
 
-DELETED event detection is deferred to a future iteration.
+All three CDC event types are covered: CREATED, UPDATED, and DELETED. DELETED detection applies to products and labels only (stores and access points have no deletion lifecycle in Vusion).
 
 ## Audience
 
@@ -64,5 +64,6 @@ Terms introduced in Phase 1 still apply. The following terms are new in Phase 2:
 | **Outbox** | The `event_outbox` table that acts as a reliable buffer between change detection and event publishing |
 | **CREATED event** | Event emitted when a record is inserted for the first time; payload contains the full record snapshot |
 | **UPDATED event** | Event emitted when an existing record's non-audit fields change; payload contains only the changed fields as `{"field": {"old": X, "new": Y}}` diffs |
+| **DELETED event** | Event emitted when a record's status transitions to `DELETED`; payload is empty — the published message carries only entity key, `eventId`, and `send_date` |
 | **Entity key** | Composite business key that uniquely identifies a record (e.g., `retail_chain_id + store_id` for stores) |
 | **esl-common** | Shared Go library providing CDC types and entity definitions used by multiple components |

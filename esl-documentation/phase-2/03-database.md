@@ -12,15 +12,15 @@ All existing Phase 1 tables remain unchanged.
 
 ### event_outbox
 
-Stores CDC events detected during pipeline execution. Each row represents a single CREATED or UPDATED event for one entity record.
+Stores CDC events detected during pipeline execution. Each row represents a single CREATED, UPDATED, or DELETED event for one entity record.
 
 | Column | Type | Default | Description |
 |---|---|---|---|
 | `id` | UUID | `gen_random_uuid()` | Unique event identifier (PK) |
-| `event_type` | VARCHAR(20) | — | Change type: `CREATED` or `UPDATED` |
+| `event_type` | VARCHAR(20) | — | Change type: `CREATED`, `UPDATED`, or `DELETED` |
 | `entity_type` | VARCHAR(50) | — | Entity that changed: `store`, `product`, `label`, `accesspoint` |
 | `entity_key` | JSONB | — | Composite business key identifying the record (e.g., `{"retail_chain_id": "RC001", "store_id": "S001"}`) |
-| `payload` | JSONB | — | Event payload — full snapshot for CREATED, changed-field diffs for UPDATED |
+| `payload` | JSONB | — | Event payload — full snapshot for CREATED, changed-field diffs for UPDATED, empty `{}` for DELETED |
 | `occurred_at` | TIMESTAMPTZ | `NOW()` | When the change was detected (defaults to transaction time) |
 | `status` | TEXT | `'PENDING'` | Delivery status: `PENDING`, `DELIVERED`, or `FAILED` |
 | `delivered_at` | TIMESTAMPTZ | `NULL` | When the event was published to Solace |
@@ -62,6 +62,17 @@ The `status` column tracks delivery lifecycle explicitly. The Event Publisher tr
     "price": {"old": 1.29, "new": 1.49},
     "status": {"old": "active", "new": "updated"}
   }
+}
+```
+
+**DELETED events** carry an empty payload — the entity key identifies the deleted record, and the Event Publisher adds `eventId` and `send_date` at publish time:
+
+```json
+{
+  "event_type": "DELETED",
+  "entity_type": "product",
+  "entity_key": {"retail_chain_id": "RC001", "store_id": "S001", "item_id": "P001"},
+  "payload": {}
 }
 ```
 
@@ -121,8 +132,22 @@ Only delivered events are eligible for cleanup. Events with status `PENDING` or 
 | V1.0.0.15 | Create `event_outbox` table |
 | V1.0.0.16 | Create partial indexes on `event_outbox` |
 | V1.0.0.17 | Create `cleanup_delivered_events` retention function |
+| V1.0.0.18 | Create `event_outbox` UUID primary key and retention function |
+| V1.0.0.19 | Add `deletion_date` to labels; add `deleted_at` to products and labels |
+| V1.0.0.20 | Increase entity ID columns (`item_id`, `label_id`, `access_points.id`) to VARCHAR(255) |
 
 These migrations follow the same conventions established in Phase 1: table and indexes in separate files, snake_case naming, all objects in the `esl` schema.
+
+### Deletion columns (V1.0.0.19)
+
+Products and labels support soft-delete via dual timestamps:
+
+| Column | Table | Description |
+|---|---|---|
+| `deletion_date` | products, labels | Business timestamp from Vusion — when the record was marked deleted. Reliably populated for products; may be NULL for labels (Vusion returns NULL even on confirmed-DELETED label rows) |
+| `deleted_at` | products, labels | Audit timestamp — when the pipeline first detected the deletion. Set by `injectAuditTimestamps` on records with `status = 'DELETED'`; preserved on subsequent upserts via `COALESCE` |
+
+Stores and access points have no deletion lifecycle in Vusion and do not have these columns.
 
 ## Key Design Decisions
 

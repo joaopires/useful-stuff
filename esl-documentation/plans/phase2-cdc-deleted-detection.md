@@ -374,6 +374,6 @@ Integration (`cdc_integration_test.go`):
 - [x] datafetch: entities.yaml updated for products + labels
 - [x] event-publisher: DELETED test case added
 - [x] Repo-level docs updated (datapipeline examples + postgres-sink.md, event-publisher README, database README)
-- [ ] Phase 2 docs (§01, §02, §03, §04, §05) updated
-- [ ] Masterplan updated with step 11
-- [ ] Manual e2e verification in dev env (including first-contact tombstone scale check)
+- [x] Phase 2 docs (§01, §02, §03, §04, §05) updated
+- [x] Masterplan updated with step 11
+- [x] Manual e2e verification in dev env (2026-04-16): 6,030 product + 630 label tombstones, all deleted_at set, 6,660 DELETED outbox events with empty payload, Solace delivery confirmed

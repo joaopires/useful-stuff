@@ -2,7 +2,7 @@
 
 ## Context
 
-Phase 1 established a data pipeline that syncs ESL data from Vusion APIs into PostgreSQL via batched upserts. Phase 2 adds Change Data Capture: detecting CREATED and UPDATED records during each pipeline execution and publishing events to Solace with guaranteed delivery and no duplications. The DELETED change type is defined in esl-common but not implemented in Phase 2 — deferred to a later iteration.
+Phase 1 established a data pipeline that syncs ESL data from Vusion APIs into PostgreSQL via batched upserts. Phase 2 adds Change Data Capture: detecting CREATED, UPDATED, and DELETED records during each pipeline execution and publishing events to Solace with guaranteed delivery and no duplications.
 
 ## Architecture
 
@@ -96,7 +96,7 @@ Connector → Transformer → Sink ──┐
 | 8 | DOCS: event publisher | Done (2026-04-10) |
 | 9 | k8s helm | PR open (2026-04-15, k8s PR #30) |
 | 10 | DOCS: deployment, operations | Done (2026-04-15) |
-| 11 | DELETED event detection (pulled forward from Phase 3) | Planning (2026-04-16) |
+| 11 | DELETED event detection (pulled forward from Phase 3) | Done (2026-04-16) — database, datapipeline, datafetch, event-publisher, docs merged; e2e pending |
 
 ## Documentation
 

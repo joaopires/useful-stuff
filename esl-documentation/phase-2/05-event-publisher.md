@@ -109,10 +109,10 @@ The transform step converts an outbox `ChangeEvent` into a flat JSON payload and
 ### Payload assembly
 
 1. **Start with entity key fields** — `retail_chain_id`, `store_id`, and any additional conflict keys (`item_id`, `label_id`, `id`)
-2. **Merge payload fields** — For CREATED events, the payload is already flat. For UPDATED events, diff objects `{"old": X, "new": Y}` are flattened to extract only the `"new"` value. Audit columns (`created_at`, `last_updated_at`) pass through as-is (they are already flat values, not diffs).
+2. **Merge payload fields** — For CREATED events, the payload is already flat. For UPDATED events, diff objects `{"old": X, "new": Y}` are flattened to extract only the `"new"` value. For DELETED events, the payload is empty — only entity key fields and metadata are published. Audit columns (`created_at`, `last_updated_at`) pass through as-is (they are already flat values, not diffs).
 3. **Add metadata** — `eventId` (the outbox row UUID) and `send_date` (current time in RFC3339)
 
-The result is a flat JSON object regardless of event type. Downstream consumers distinguish between creation and update events via the Solace topic, not the payload structure.
+The result is a flat JSON object regardless of event type. Downstream consumers distinguish between event types via the Solace topic, not the payload structure.
 
 ### Example published event
 
@@ -143,7 +143,7 @@ in-store/orchestratoresl/{entitySegment}/{messageType}/v1/{insignia}/{storeId}
 | Variable | Source |
 |---|---|
 | `{entitySegment}` | Static mapping from entity type (see table below) |
-| `{messageType}` | Event type lowercased: `created`, `updated` |
+| `{messageType}` | Event type lowercased: `created`, `updated`, `deleted` |
 | `{insignia}` | `retail_chain_id` from `entity_key` |
 | `{storeId}` | `store_id` from `entity_key` |
 
@@ -161,6 +161,7 @@ in-store/orchestratoresl/{entitySegment}/{messageType}/v1/{insignia}/{storeId}
 ```
 in-store/orchestratoresl/stores/store/created/v1/continente_pt/000010
 in-store/orchestratoresl/products/product/updated/v1/continente_pt/000010
+in-store/orchestratoresl/products/product/deleted/v1/bomdia_pt/009648
 in-store/orchestratoresl/labels/label/created/v1/continente_pt/000010
 in-store/orchestratoresl/accesspoints/accesspoint/updated/v1/continente_pt/000010
 ```

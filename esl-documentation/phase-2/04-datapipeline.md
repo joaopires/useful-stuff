@@ -2,7 +2,7 @@
 
 ## Overview
 
-Phase 2 adds Change Data Capture (CDC) to the Data Pipeline's PostgreSQL sink. When enabled, the sink detects CREATED and UPDATED records during each batch write and inserts corresponding change events into the `event_outbox` table — atomically, within the same database transaction as the upserts.
+Phase 2 adds Change Data Capture (CDC) to the Data Pipeline's PostgreSQL sink. When enabled, the sink detects CREATED, UPDATED, and DELETED records during each batch write and inserts corresponding change events into the `event_outbox` table — atomically, within the same database transaction as the upserts.
 
 The CDC logic is encapsulated in a dedicated `CDC` struct that the sink delegates to. When CDC is disabled (the default), the sink behaves exactly as in Phase 1 — no transaction wrapper, no pre-fetch, no outbox writes.
 
@@ -129,6 +129,8 @@ Each incoming record is compared against the pre-fetched existing state:
 
 | Condition | Event | Payload |
 |---|---|---|
+| Existing and incoming both `status = "DELETED"` | No event (skip fast) | — |
+| Incoming `status = "DELETED"` (transition or first-contact) | **DELETED** | Empty `{}` |
 | Key not found in existing rows | **CREATED** | All non-key fields (full snapshot) |
 | Key found, business fields differ | **UPDATED** | Only changed fields as `{"old": X, "new": Y}` diffs |
 | Key found, all fields identical | No event | — |
@@ -265,6 +267,7 @@ The same error classification from Phase 1 applies:
 |---|---|---|
 | `sink.cdc.events` (attribute: `event_type=CREATED`) | Counter | Number of CREATED events detected |
 | `sink.cdc.events` (attribute: `event_type=UPDATED`) | Counter | Number of UPDATED events detected |
+| `sink.cdc.events` (attribute: `event_type=DELETED`) | Counter | Number of DELETED events detected |
 | `sink.cdc.detect_duration_ms` | Histogram | Time spent in change detection (SELECT + classify) |
 | `sink.cdc.outbox_duration_ms` | Histogram | Time spent writing to the outbox |
 
@@ -310,8 +313,44 @@ sink:
 
 No additional CDC-specific settings are needed. The outbox table must exist in the database (see [Database](03-database.md) migrations V1.0.0.15–17).
 
+## Deletion Detection
+
+### Scope
+
+DELETED event detection applies to **products and labels only**. Stores and access points have no deletion lifecycle in Vusion.
+
+### VLink `deleted=true`
+
+The VLink client always passes `deleted=true` on all product and label endpoints. This is an additive toggle — the response includes both ACTIVE and DELETED rows in a single paginated walk. No separate endpoint or second request is needed.
+
+### Detection signal
+
+The canonical detection signal is `status == "DELETED"`. This works for both products and labels. `deletionDate` from Vusion is stored as informational metadata but is not used for detection — it is unreliable for labels (observed NULL on confirmed-DELETED rows).
+
+### Soft-delete storage
+
+Records are soft-deleted via dual timestamps following the existing audit convention:
+
+| Column | Source | Description |
+|---|---|---|
+| `deletion_date` | Vusion `deletionDate` field | Business timestamp — when Vusion marked the record deleted. Reliable for products; informational for labels (may be NULL) |
+| `deleted_at` | Pipeline batch timestamp | Audit timestamp — when the pipeline first detected the deletion. Set by `injectAuditTimestamps` regardless of CDC on/off. Preserved on subsequent upserts via `COALESCE(existing, new)` |
+
+The record stays in the database with all fields intact. No hard `DELETE` SQL is issued.
+
+### Audit timestamp (`deleted_at`) behaviour
+
+`deleted_at` is injected by `injectAuditTimestamps` — the same function that sets `created_at` and `last_updated_at` on every record. When a record has `status == "DELETED"`, `deleted_at` is set to the batch timestamp. This works identically with CDC enabled or disabled.
+
+On upsert conflict, the SQL uses `COALESCE(existing.deleted_at, EXCLUDED.deleted_at)` — the first-detection timestamp is preserved; subsequent syncs of the same deleted record do not overwrite it.
+
+### Classification edge cases
+
+| Scenario | Behaviour |
+|---|---|
+| ACTIVE → DELETED | Emit DELETED event (empty payload) |
+| DELETED → DELETED | No event (skip fast) |
+| DELETED → ACTIVE (theoretical undelete) | Treated as regular UPDATED — no special event type |
+| Key not in DB + incoming DELETED | Emit single DELETED event (first-contact tombstone) |
+
 ## Known Limitations
-
-### No DELETED event detection
-
-Phase 2 only detects CREATED and UPDATED changes. DELETED event detection is deferred to a future iteration. The `ChangeTypeDeleted` constant is defined in esl-common but not used by the CDC logic.

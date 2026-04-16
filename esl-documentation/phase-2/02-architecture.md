@@ -16,9 +16,11 @@ The CDC data flow adds three steps to the existing upsert path:
 
 1. **Pre-fetch** — Before upserting a batch, the sink queries the current state of the target rows within a database transaction
 2. **Classify** — Each incoming record is compared against the pre-fetched state:
+   - Existing `status` already `DELETED` and incoming `status` also `DELETED` → no event (skip fast)
+   - Incoming `status` is `DELETED` (transition or first-contact tombstone) → **DELETED** (payload: empty)
    - Key not found → **CREATED** (payload: full record snapshot)
    - Key found, fields differ → **UPDATED** (payload: changed fields as old/new diffs)
-   - Key found, identical → no event
+   - Key found, all fields identical → no event
 3. **Outbox write** — Detected change events are inserted into `esl.event_outbox` within the same transaction as the upsert batch
 4. **Publish** — The Event Publisher polls undelivered outbox rows, publishes each to Solace, and marks them as delivered
 
@@ -47,8 +49,9 @@ The `esl-common` module provides types and definitions shared between the Data P
 ```go
 type ChangeType string
 const (
-    ChangeTypeCreated  ChangeType = "CREATED"
+    ChangeTypeCreated ChangeType = "CREATED"
     ChangeTypeUpdated ChangeType = "UPDATED"
+    ChangeTypeDeleted ChangeType = "DELETED"
 )
 
 type ChangeEvent struct {
