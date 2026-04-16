@@ -257,41 +257,105 @@ Integration (`cdc_integration_test.go`):
 
 3. **datapipeline `internal/sink/postgres/config.go`**: add `ColDeletedAt` constant (+ `ColStatus` if missing).
 
-4. **datapipeline `internal/connector/vusion/vlink/client.go`**: extend `doRequest` signature with `deleted bool`; emit `&deleted=true` when set.
+4. **datapipeline `internal/connector/vusion/vlink/client.go`**: hardcode `deleted=true` in `doRequest` (always fetch ACTIVE + DELETED in a single walk).
 
-5. **datapipeline `internal/connector/vusion/vusion.go` + `vlink/client.go`**: thread `deleted=true` through `StreamProductsModifiedSince`, `StreamLabelsModifiedSince`, `StreamAllProducts`, `StreamAllLabels`. Update `vlinkClient` interface accordingly.
+5. **datapipeline `internal/connector/vusion/vlink/client.go`**: `doRequest` now always appends `&deleted=true`. No parameter needed — both `getAllProducts` and `getAllLabels` inherit the behaviour. Interface signatures unchanged.
 
-6. **datapipeline `internal/sink/postgres/cdc.go`**: extend audit-exclusion map; add DELETED branch to `classifyAndDiff`; inject `deleted_at` on the transition; handle edge cases.
+6. **datapipeline `internal/sink/postgres/cdc.go`**: extend audit-exclusion map with `ColDeletedAt`; add DELETED branch to `classifyAndDiff` (skip-fast for DELETED→DELETED, emit DELETED event for transitions and first-contact tombstones); `deleted_at` injected by `injectAuditTimestamps` (works with CDC on or off). `models.StatusDeleted` shared constant. `coalesceOnConflict` set in `config.go` for `deleted_at` UPSERT preservation.
 
-7. **datapipeline `internal/sink/postgres/query.go`**: add `ColDeletedAt` to `excludeFromUpdate`.
+7. **datapipeline `internal/sink/postgres/query.go`**: `deleted_at` uses `COALESCE(existing, new)` via `coalesceOnConflict` set — preserves first-detection timestamp.
 
-8. **datapipeline sink tests**: unit + integration coverage for the DELETED path. Test both product and label shapes, including labels with `deletion_date: NULL` on a DELETED transition.
+8. **datapipeline sink tests**: 6 unit tests + 3 integration tests for the DELETED path (transition, already-deleted, first-contact, deleted_at exclusion, audit timestamps).
 
-9. **datapipeline `internal/connector/vusion/sync.go`**: add `ProductsDeleted` / `LabelsDeleted` to `StoreSyncRun`; increment from classifier hook or counter wrapper.
+9. ~~**datapipeline `internal/connector/vusion/sync.go`**: add `ProductsDeleted` / `LabelsDeleted` to `StoreSyncRun`~~ — **Removed.** Deleted counts are tracked only via OTel metric `eslorchestrator.sink.cdc.deleted` (same pattern as CREATED/UPDATED). No persistence to state tables.
 
 10. **datafetch `entities.yaml`**: add `deleted_at` (internal) to products; add `deletion_date` (regular) + `deleted_at` (internal) to labels.
 
-11. **event-publisher**: add `TestToPublishedEvent_Deleted` (product + label shapes).
+11. **event-publisher**: add `TestToPublishedEvent_Deleted` (product + label shapes). No code changes needed — transform is already event-type agnostic.
 
-12. **Documentation**: revise §01, §02, §03, §04, §05 per the table above. Update masterplan.
+12. **Documentation**: revise §01, §02, §03, §04, §05 per the table above. Update masterplan. Also update repo-level docs (datapipeline examples + postgres-sink.md, event-publisher README, database README).
 
-13. **Manual e2e verification in dev**:
-    - Pick a test product + label in VLink
-    - Have them marked DELETED via Vusion (or wait for a natural deletion)
-    - Run datapipeline; verify DB rows have `status = "DELETED"`, `deleted_at` set, `deletion_date` set for products (may be NULL for labels)
-    - Verify outbox has DELETED entries with correct entity_key and payload
-    - Verify publisher delivers them to Solace with `deleted` message-type topic segment
-    - Verify `ProductsDeleted` / `LabelsDeleted` metrics incremented
-    - First-contact full-sweep scale check: on a fresh store, verify ~6,025 product tombstones and ~631 label tombstones (pre-prod numbers on `bomdia_pt.009648`) are accepted without sink backpressure
+13. **Manual e2e verification in dev** (checklist):
+
+    **Pre-requisites:**
+    - V1.0.0.19 (deletion columns) and V1.0.0.20 (entity ID lengths) applied to the target database
+    - Fresh store (zero-day import) or cleared store state to force full sync
+
+    **Run datapipeline** (full sync against `bomdia_pt.009648`):
+    - [ ] Pipeline completes without errors
+
+    **Verify database — products:**
+    ```sql
+    -- DELETED products have status, deleted_at, and deletion_date set
+    SELECT item_id, status, deletion_date, deleted_at
+    FROM esl.products
+    WHERE retail_chain_id = 'bomdia_pt' AND store_id = '009648' AND status = 'DELETED'
+    LIMIT 10;
+
+    -- Count: expect ~6,025 DELETED product tombstones
+    SELECT COUNT(*) FROM esl.products
+    WHERE retail_chain_id = 'bomdia_pt' AND store_id = '009648' AND status = 'DELETED';
+
+    -- No DELETED product should have NULL deleted_at
+    SELECT COUNT(*) FROM esl.products
+    WHERE retail_chain_id = 'bomdia_pt' AND store_id = '009648'
+      AND status = 'DELETED' AND deleted_at IS NULL;
+    -- Expected: 0
+    ```
+
+    **Verify database — labels:**
+    ```sql
+    -- DELETED labels have status and deleted_at set; deletion_date may be NULL
+    SELECT label_id, status, deletion_date, deleted_at
+    FROM esl.labels
+    WHERE retail_chain_id = 'bomdia_pt' AND store_id = '009648' AND status = 'DELETED'
+    LIMIT 10;
+
+    -- Count: expect ~631 DELETED label tombstones
+    SELECT COUNT(*) FROM esl.labels
+    WHERE retail_chain_id = 'bomdia_pt' AND store_id = '009648' AND status = 'DELETED';
+
+    -- No DELETED label should have NULL deleted_at
+    SELECT COUNT(*) FROM esl.labels
+    WHERE retail_chain_id = 'bomdia_pt' AND store_id = '009648'
+      AND status = 'DELETED' AND deleted_at IS NULL;
+    -- Expected: 0
+    ```
+
+    **Verify outbox — DELETED entries:**
+    ```sql
+    -- DELETED events have empty payload ({})
+    SELECT id, event_type, entity_type, entity_key, payload
+    FROM esl.event_outbox
+    WHERE event_type = 'DELETED'
+    ORDER BY occurred_at DESC
+    LIMIT 10;
+
+    -- All DELETED payloads should be empty
+    SELECT COUNT(*) FROM esl.event_outbox
+    WHERE event_type = 'DELETED' AND payload != '{}';
+    -- Expected: 0
+    ```
+
+    **Verify CDC logs:**
+    - [ ] `cdc_deleted` field appears in "CDC change detection completed" log lines with non-zero values
+
+    **Run event-publisher** (with Solace broker running):
+    - [ ] Publisher picks up DELETED outbox entries
+    - [ ] Solace receives messages on `.../deleted/v1/...` topics
+    - [ ] Published payload contains only entity key fields + `eventId` + `send_date`
+
+    **Scale check:**
+    - [ ] Full sync of ~6,025 product tombstones + ~631 label tombstones completes without sink backpressure or timeouts
 
 14. **Regenerate Phase 2 PDF** (batched with any other post-rollout polish; not blocking).
 
 ## Verification
 
-- `make lint && make test && go test -tags=integration ./...` in datapipeline — 0 issues
-- `make lint && make test && make test-integration` in datafetch — schema validator passes; new columns exposed
-- `make lint && go test -tags=integration ./...` in event-publisher — 0 issues
-- Manual e2e above
+- `make lint && make test && go test -tags=integration ./...` in datapipeline — 0 issues ✓
+- `make lint && make test` in datafetch — schema validator passes; new columns exposed ✓
+- `make lint && go test -tags=integration ./...` in event-publisher — 0 issues ✓
+- Manual e2e checklist above
 
 ## Scope explicitly NOT covered
 
@@ -305,10 +369,11 @@ Integration (`cdc_integration_test.go`):
 
 - [x] Payload shape decision locked (minimal: entity_key + send_date + event_id)
 - [x] Key-not-in-DB edge case locked (emit single DELETED event)
-- [ ] database: V1.0.0.19 migration merged (+ optional products backfill)
-- [ ] datapipeline: client + stream methods + models + config + cdc + query + sync (metrics) + tests merged
-- [ ] datafetch: entities.yaml updated for products + labels
-- [ ] event-publisher: DELETED test case added
+- [x] database: V1.0.0.19 (deletion columns) + V1.0.0.20 (entity ID lengths) merged
+- [x] datapipeline: client + models + config + cdc + query + write_batch + telemetry + tests merged
+- [x] datafetch: entities.yaml updated for products + labels
+- [x] event-publisher: DELETED test case added
+- [x] Repo-level docs updated (datapipeline examples + postgres-sink.md, event-publisher README, database README)
 - [ ] Phase 2 docs (§01, §02, §03, §04, §05) updated
 - [ ] Masterplan updated with step 11
 - [ ] Manual e2e verification in dev env (including first-contact tombstone scale check)
