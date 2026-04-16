@@ -51,9 +51,9 @@ Connector → Transformer → Sink ──┐
 
 ## Open Questions
 
-- **Solace messaging mode:** Persistent (guaranteed, needs queue provisioning) or direct?
-- **Outbox retention period:** 7 days? 30 days? Configurable per env?
+- **Outbox retention period:** 7 days? 30 days? Configurable per env? *(V1.0.0.18 ships with 7-day default via `esl.cleanup_delivered_events(retention_days INT DEFAULT 7)`; per-env tuning can follow rollout observations)*
 - **`esl-go-commons` repo hosting:** Same GitHub org as other ESL repos? *(resolved: yes — `sonaemc-instore` org)*
+- **Solace messaging mode:** *(resolved: persistent/guaranteed. Event-publisher uses `PublishMessageConfirmed` with go-solace-sdk internal retries — see §05-event-publisher.md. Direct mode was ruled out: the outbox pattern guarantees at-least-once end-to-end, which persistent delivery preserves and direct would undermine.)*
 
 ## Implementation Order
 

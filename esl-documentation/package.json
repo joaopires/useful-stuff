@@ -1,0 +1,8 @@
+{
+  "name": "esl-documentation",
+  "private": true,
+  "description": "Diagram tooling for ESL documentation — renders Mermaid sources to SVG for pandoc/typst.",
+  "devDependencies": {
+    "@mermaid-js/mermaid-cli": "^11.6.0"
+  }
+}

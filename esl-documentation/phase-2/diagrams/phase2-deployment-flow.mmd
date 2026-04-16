@@ -1,0 +1,27 @@
+flowchart TD
+    Start(["Chart changes ready<br/>(helm-lint clean)"]) --> Merge["Merge per-env values<br/>CDC disabled"]
+
+    Merge --> SyncDev["ArgoCD sync — dev"]
+    SyncDev --> DevPre["PreSync: Flyway Job<br/>V1.0.0.14–20"]
+    DevPre --> DevApp["Apply workloads<br/>(datapipeline, event-publisher,&#8230;)"]
+    DevApp --> DevVerify{"dev verification<br/>• outbox reachable<br/>• publisher /ready = 200<br/>• no datapipeline cdc_* logs"}
+    DevVerify -- "pass" --> DevFlip["Flip cdc.enabled: true (dev)<br/>manual sync, inspect outbox<br/>and Solace topic traffic"]
+
+    DevFlip --> PpPromote["Promote chart to pp"]
+    PpPromote --> SyncPp["ArgoCD sync — pp"]
+    SyncPp --> PpPre["PreSync + apply workloads"]
+    PpPre --> PpVerify{"pp verification<br/>• event shapes + counts<br/>• outbox drains<br/>• Solace receives messages"}
+    PpVerify -- "pass" --> PpFlip["Flip cdc.enabled: true (pp)"]
+
+    PpFlip --> PrdPromote["Promote chart to prd"]
+    PrdPromote --> SyncPrd["ArgoCD sync — prd"]
+    SyncPrd --> PrdPre["PreSync + apply workloads"]
+    PrdPre --> PrdVerify{"prd verification<br/>• publisher stable ≥24h (CDC off)<br/>• telemetry + log flow<br/>• stakeholder sign-off"}
+    PrdVerify -- "pass" --> PrdFlip["Flip cdc.enabled: true (prd)"]
+
+    classDef env fill:#e6f3ff,stroke:#2a6fae
+    classDef gate fill:#fff8dc,stroke:#c0a000
+    classDef flip fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    class SyncDev,SyncPp,SyncPrd env
+    class DevVerify,PpVerify,PrdVerify gate
+    class DevFlip,PpFlip,PrdFlip flip

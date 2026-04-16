@@ -1,0 +1,52 @@
+flowchart LR
+    Vusion[("Vusion APIs<br/>(VLink, VSettings)")] --> Connector
+    K8sSched(["Kubernetes<br/>CronJob schedule"]) -.->|triggers| Pipeline
+
+    subgraph Pipeline["Data Pipeline (Go CronJob)"]
+        direction LR
+        Connector["Connector<br/>fetch + paginate<br/>deleted=true"] --> Transformer["Transformer<br/>normalise fields<br/>map deletion_date"]
+        Transformer --> Sink["Sink (postgres)<br/>pre-fetch · classify ·<br/>upsert · write outbox<br/>(one transaction)"]
+    end
+
+    subgraph DB["PostgreSQL — esl schema"]
+        direction TB
+        Entities[("Entity tables<br/>stores · products ·<br/>labels · access_points")]
+        Outbox[("event_outbox<br/>PENDING → DELIVERED / FAILED")]
+    end
+
+    Sink -->|upsert + soft-delete| Entities
+    Sink -->|INSERT change events<br/>same transaction| Outbox
+
+    subgraph Publisher["Event Publisher (Go Deployment)"]
+        direction TB
+        Relay["Relay<br/>poll loop (1 s)<br/>FOR UPDATE SKIP LOCKED"]
+        Transform["Transform<br/>flat JSON + topic"]
+        SolaceClient["Solace client<br/>go-solace-sdk<br/>PublishMessageConfirmed"]
+        Relay --> Transform --> SolaceClient
+    end
+
+    Outbox -->|poll PENDING| Relay
+    Relay -->|mark DELIVERED / FAILED| Outbox
+    SolaceClient -->|persistent confirmed| Broker(["Solace broker<br/>topic: in-store/orchestratoresl/&hellip;"])
+
+    subgraph DataFetch["DataFetch API (Go Deployment, Phase 1)"]
+        direction TB
+        API["REST API<br/>Gin + pgx"]
+    end
+    Entities -->|read-only| API
+    API --> Consumers(["External consumers"])
+
+    subgraph Commons["Shared Go module"]
+        direction TB
+        ESLCommon["esl-common<br/>entity types · CDC events ·<br/>postgres pool + error classes"]
+    end
+    ESLCommon -.->|imported by| Pipeline
+    ESLCommon -.->|imported by| Publisher
+    ESLCommon -.->|imported by| DataFetch
+
+    classDef new fill:#e6f3ff,stroke:#2a6fae,stroke-width:2px
+    classDef external fill:#f5f5f5,stroke:#666
+    classDef store fill:#fff8dc,stroke:#c0a000
+    class Publisher,Outbox new
+    class Vusion,Broker,Consumers,K8sSched external
+    class Entities store

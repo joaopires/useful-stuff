@@ -28,6 +28,8 @@ Expected distributions:
 | Growing `PENDING` | Publisher not running, crashed, or unable to reach Solace |
 | Growing `FAILED` | Transform or publish errors — see runbook |
 
+> **Expect a DELETED spike on the initial full sync.** The first datapipeline run against a store with no prior sync state emits a DELETED event for every historical DELETED row returned by VLink (products and labels only — see [04-datapipeline.md](04-datapipeline.md)). For a reference store (`bomdia_pt.009648`), this produces roughly **6,025 product + 631 label DELETED rows** in a single run — around 6,600 DELETED outbox entries appear at once. This is normal behaviour, not a backlog. Subsequent incremental runs only emit DELETED events on actual status transitions.
+
 Useful supplementary queries:
 
 ```sql
@@ -246,7 +248,7 @@ As documented in [04-datapipeline.md](04-datapipeline.md), CDC adds approximatel
 
 Migration V1.0.0.18 (event_outbox_retention) handles periodic cleanup:
 
-- DELIVERED rows older than the retention window (default: 30 days) are purged
+- DELIVERED rows older than the retention window (default: 7 days) are purged
 - FAILED rows are never purged automatically — manual intervention is required
 
 Monitor table size:
@@ -258,7 +260,7 @@ SELECT pg_size_pretty(pg_total_relation_size('esl.event_outbox')) AS total_size;
 SELECT COUNT(*)
 FROM esl.event_outbox
 WHERE status = 'DELIVERED'
-  AND delivered_at < NOW() - INTERVAL '30 days';
+  AND delivered_at < NOW() - INTERVAL '7 days';
 
 -- Count of unresolved FAILED rows (investigate if this grows)
 SELECT COUNT(*) FROM esl.event_outbox WHERE status = 'FAILED';

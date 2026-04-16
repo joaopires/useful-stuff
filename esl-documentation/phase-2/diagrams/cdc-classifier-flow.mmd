@@ -1,0 +1,21 @@
+flowchart TD
+    Start["Incoming record<br/>(from transformer)"] --> KeyCheck{"Key found in<br/>pre-fetched rows?"}
+
+    KeyCheck -- "No (key not in DB)" --> IncDel1{"incoming.status<br/>== DELETED?"}
+    IncDel1 -- "Yes" --> DelNew["DELETED event<br/>initial full sync"]
+    IncDel1 -- "No" --> Created["CREATED event<br/>full snapshot"]
+
+    KeyCheck -- "Yes" --> BothDel{"both existing<br/>and incoming<br/>status == DELETED?"}
+    BothDel -- "Yes" --> Skip["no event<br/>(skip fast)"]
+    BothDel -- "No" --> IncDel2{"incoming.status<br/>== DELETED?"}
+    IncDel2 -- "Yes" --> DelTx["DELETED event<br/>status transition"]
+    IncDel2 -- "No" --> Diff{"business fields<br/>differ?"}
+    Diff -- "Yes" --> Updated["UPDATED event<br/>changed-field diffs"]
+    Diff -- "No" --> NoChange["no event<br/>(no change)"]
+
+    classDef event fill:#e6f3ff,stroke:#2a6fae,stroke-width:2px
+    classDef skip  fill:#f0f0f0,stroke:#999,stroke-width:1px,color:#555
+    classDef decision fill:#fff8dc,stroke:#c0a000
+    class Created,Updated,DelNew,DelTx event
+    class Skip,NoChange skip
+    class KeyCheck,BothDel,IncDel1,IncDel2,Diff decision

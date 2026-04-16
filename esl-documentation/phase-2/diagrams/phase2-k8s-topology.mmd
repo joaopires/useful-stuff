@@ -1,0 +1,51 @@
+flowchart LR
+    subgraph NS["Kubernetes namespace: orchestrator-esl"]
+        direction TB
+
+        subgraph Jobs["Jobs & CronJobs"]
+            direction TB
+            DBM["dbMigrations<br/>PreSync Job<br/>(Flyway)"]
+            DP["datapipeline<br/>CronJob"]
+        end
+
+        subgraph Deploys["Deployments"]
+            direction TB
+            DF["datafetch<br/>Deployment"]
+            EP["event-publisher<br/>Deployment"]
+        end
+
+        subgraph Config["Secrets & Config"]
+            direction TB
+            ES["ExternalSecret"]
+            CM["ConfigMap"]
+            SA["ServiceAccount"]
+        end
+    end
+
+    subgraph External["External services"]
+        direction TB
+        PG[("PostgreSQL<br/>esl schema")]
+        Vault[("Vault<br/>{vaultBasePath}/database<br/>{vaultBasePath}/solace")]
+        Solace(["Solace Cloud<br/>gateway pod<br/>(namespace: solace-cloud)"])
+        OTel(["OTel collector"])
+    end
+
+    DBM -->|flyway migrate| PG
+    DP  -->|upsert + outbox write| PG
+    DF  -->|read| PG
+    EP  -->|poll outbox / update status| PG
+    EP  -->|publish persistent| Solace
+
+    ES  -->|sync| Vault
+    EP  -.->|mounts Secret| ES
+    DP  -.->|mounts Secret| ES
+    DF  -.->|mounts Secret| ES
+
+    DP  -->|metrics + logs| OTel
+    EP  -->|metrics + logs| OTel
+    DF  -->|metrics + logs| OTel
+
+    classDef new fill:#e6f3ff,stroke:#2a6fae,stroke-width:2px
+    classDef existing fill:#f5f5f5,stroke:#666
+    class EP new
+    class DBM,DP,DF,ES,CM,SA existing

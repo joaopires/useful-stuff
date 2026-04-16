@@ -1,0 +1,43 @@
+flowchart LR
+    K8s(["Kubernetes<br/>liveness / readiness"]) -.->|probes| Health
+
+    subgraph Service["Event Publisher (Deployment)"]
+        direction TB
+
+        subgraph Relay["relay — poll loop"]
+            direction TB
+            Tick["ticker<br/>pollInterval 1 s"]
+            Exists["SELECT EXISTS<br/>status = PENDING"]
+            Fetch["SELECT … FOR UPDATE<br/>SKIP LOCKED LIMIT 100"]
+            Loop["for each row:<br/>transform + publish"]
+            Mark["UPDATE status<br/>DELIVERED / FAILED"]
+            Commit["COMMIT tx"]
+            Tick --> Exists
+            Exists -- "rows exist" --> Fetch
+            Exists -- "empty" --> Tick
+            Fetch --> Loop
+            Loop --> Mark
+            Mark --> Commit
+            Commit --> Tick
+        end
+
+        Transform["transform<br/>flat JSON + dynamic topic<br/>flatten UPDATED diffs"]
+        SolaceClient["messaging/solace<br/>PublishMessageConfirmed<br/>retries + ack"]
+        Health["health<br/>HTTP :8081<br/>/live · /ready"]
+
+        Loop --> Transform
+        Transform --> SolaceClient
+    end
+
+    Outbox[("event_outbox<br/>(PostgreSQL)")]
+    Broker(["Solace broker<br/>persistent confirmed"])
+    OTel(["OTel collector"])
+
+    Outbox <-->|pgx: fetch · mark| Relay
+    SolaceClient -->|publish| Broker
+    Service -.->|metrics + logs| OTel
+
+    classDef loop fill:#e6f3ff,stroke:#2a6fae
+    classDef external fill:#f5f5f5,stroke:#666
+    class Tick,Exists,Fetch,Loop,Mark,Commit loop
+    class Outbox,Broker,OTel,K8s external

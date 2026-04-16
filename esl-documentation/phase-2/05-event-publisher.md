@@ -6,7 +6,7 @@ The Event Publisher is a long-running Go service that polls the `event_outbox` t
 
 The service follows a simple loop: poll → transform → publish → mark delivered. Each cycle runs within a single database transaction, using `SELECT FOR UPDATE SKIP LOCKED` for row-level locking. Events are published with persistent confirmed delivery, providing at-least-once guarantees.
 
-![Event Publisher Flow](diagrams/publisher-flow.svg)
+![Event Publisher Flow](diagrams/publisher-flow.png)
 
 ## Technology Stack
 
@@ -114,7 +114,9 @@ The transform step converts an outbox `ChangeEvent` into a flat JSON payload and
 
 The result is a flat JSON object regardless of event type. Downstream consumers distinguish between event types via the Solace topic, not the payload structure.
 
-### Example published event
+### Example published events
+
+**CREATED / UPDATED** — payload carries entity key fields, business fields, and audit timestamps:
 
 ```json
 {
@@ -127,6 +129,18 @@ The result is a flat JSON object regardless of event type. Downstream consumers 
   "created_at": "2026-03-01T10:00:00Z",
   "last_updated_at": "2026-04-06T14:30:00Z",
   "send_date": "2026-04-09T12:00:00Z"
+}
+```
+
+**DELETED** — minimal payload: only entity key fields plus `eventId` and `send_date`. No business fields, no audit timestamps. Consumers identify the deleted record via the entity key and the `deleted` topic segment:
+
+```json
+{
+  "eventId": "b1ffec00-1d2a-4fa8-9c7e-7cc0ce4917bb",
+  "retail_chain_id": "bomdia_pt",
+  "store_id": "009648",
+  "item_id": "5601234567890",
+  "send_date": "2026-04-16T09:15:00Z"
 }
 ```
 

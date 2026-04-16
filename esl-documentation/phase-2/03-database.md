@@ -6,7 +6,7 @@ Phase 2 adds a single new table — `event_outbox` — to the existing `esl` sch
 
 All existing Phase 1 tables remain unchanged.
 
-![ER Diagram](diagrams/er-diagram.svg)
+![ER Diagram](diagrams/er-diagram.png)
 
 ## Event Outbox Table
 

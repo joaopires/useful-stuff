@@ -1,0 +1,73 @@
+erDiagram
+    STORES ||--o{ PRODUCTS       : "has"
+    STORES ||--o{ LABELS         : "has"
+    STORES ||--o{ ACCESS_POINTS  : "has"
+
+    EVENT_OUTBOX }o..|| STORES        : "entity_key (logical)"
+    EVENT_OUTBOX }o..|| PRODUCTS      : "entity_key (logical)"
+    EVENT_OUTBOX }o..|| LABELS        : "entity_key (logical)"
+    EVENT_OUTBOX }o..|| ACCESS_POINTS : "entity_key (logical)"
+
+    STORES {
+        varchar  retail_chain_id       PK
+        varchar  store_id              PK
+        varchar  store_name
+        varchar  retail_chain_name
+        timestamptz creation_date
+        timestamptz modification_date
+        timestamptz created_at
+        timestamptz last_updated_at
+    }
+
+    PRODUCTS {
+        varchar  retail_chain_id  PK,FK
+        varchar  store_id         PK,FK
+        varchar  item_id          PK
+        varchar  name
+        varchar  status
+        numeric  price
+        timestamptz creation_date
+        timestamptz modification_date
+        timestamptz deletion_date     "Phase 2: from Vusion (nullable)"
+        timestamptz created_at
+        timestamptz last_updated_at
+        timestamptz deleted_at        "Phase 2: audit (nullable)"
+    }
+
+    LABELS {
+        varchar  retail_chain_id  PK,FK
+        varchar  store_id         PK,FK
+        varchar  label_id         PK
+        varchar  transmitter_id
+        varchar  status
+        timestamptz creation_date
+        timestamptz modification_date
+        timestamptz deletion_date     "Phase 2: informational (often NULL)"
+        timestamptz created_at
+        timestamptz last_updated_at
+        timestamptz deleted_at        "Phase 2: audit (nullable)"
+    }
+
+    ACCESS_POINTS {
+        varchar  retail_chain_id  PK,FK
+        varchar  store_id         PK,FK
+        varchar  id               PK
+        varchar  mac_address
+        varchar  serial_number
+        varchar  status
+        timestamptz creation_date
+        timestamptz modification_date
+        timestamptz created_at
+        timestamptz last_updated_at
+    }
+
+    EVENT_OUTBOX {
+        uuid        id            PK
+        varchar     event_type        "CREATED | UPDATED | DELETED"
+        varchar     entity_type       "store | product | label | accesspoint"
+        jsonb       entity_key
+        jsonb       payload           "diff | snapshot | empty for DELETED"
+        timestamptz occurred_at
+        text        status            "PENDING | DELIVERED | FAILED"
+        timestamptz delivered_at
+    }

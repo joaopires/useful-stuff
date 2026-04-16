@@ -125,6 +125,8 @@ The query runs within the transaction. Under READ COMMITTED isolation (the Postg
 
 ### Step 3 — Classify and Diff
 
+![CDC Classifier Flow](diagrams/cdc-classifier-flow.png)
+
 Each incoming record is compared against the pre-fetched existing state:
 
 | Condition | Event | Payload |
@@ -351,6 +353,8 @@ On upsert conflict, the SQL uses `COALESCE(existing.deleted_at, EXCLUDED.deleted
 | ACTIVE → DELETED | Emit DELETED event (empty payload) |
 | DELETED → DELETED | No event (skip fast) |
 | DELETED → ACTIVE (theoretical undelete) | Treated as regular UPDATED — no special event type |
-| Key not in DB + incoming DELETED | Emit single DELETED event (first-contact tombstone) |
+| Key not in DB + incoming DELETED | Emit single DELETED event (initial full sync) |
 
 ## Known Limitations
+
+- **Labels `deletion_date` may be NULL on confirmed-DELETED rows.** Vusion populates the `deletionDate` field unreliably for labels (observed NULL on rows whose `status` is `DELETED`). The pipeline stores `deletion_date` when provided and leaves it NULL otherwise; it never uses `deletion_date` as a detection signal. `status == "DELETED"` is the canonical classifier, and `deleted_at` (audit timestamp) is always set when the deletion is detected. Consumers that need a reliable deletion timestamp should read `deleted_at`.

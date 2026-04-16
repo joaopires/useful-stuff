@@ -10,7 +10,7 @@ The rollout is designed so that chart changes can land safely with CDC disabled.
 
 | Component | Workload | Lifecycle | Phase 1 | Phase 2 |
 |---|---|---|---|---|
-| dbMigrations | Flyway Job (PreSync hook) | One-shot per sync | Existing | New migrations V1.0.0.14–18 |
+| dbMigrations | Flyway Job (PreSync hook) | One-shot per sync | Existing | New migrations V1.0.0.14–20 (includes V1.0.0.19 deletion columns, V1.0.0.20 entity ID length widening) |
 | datapipeline | CronJob | Scheduled (daily default) | Existing | Added CDC logic + `cdc.enabled` flag |
 | datafetch | Deployment + Service + Ingress | Always-on | Existing | Unchanged |
 | **event-publisher** | Deployment | Always-on | — | **New** |
@@ -90,7 +90,7 @@ kubectl exec -it deploy/orchestrator-esl-eventpublisher -- \
   curl -s http://localhost:8081/metrics | grep event_publisher_events_processed
 ```
 
-Spot-check Solace topic subscription via the Solace Cloud portal or a test consumer.
+Spot-check Solace topic subscription via the Solace Cloud portal or a test consumer. Expect traffic on `.../created/v1/...`, `.../updated/v1/...`, and `.../deleted/v1/...` topic segments — a first-contact sync will surface historical DELETED rows on the `deleted` topics (see [04-datapipeline.md](04-datapipeline.md) and [07-operations.md](07-operations.md)).
 
 ## Rollback
 
@@ -117,9 +117,17 @@ Spot-check Solace topic subscription via the Solace Cloud portal or a test consu
 
 ## Diagrams
 
-**Placeholder — Phase 2 Kubernetes topology.** To be added as `diagrams/phase2-k8s-topology.svg`. Should show: the namespace scope, the four workloads (datafetch Deployment, datapipeline CronJob, dbMigrations PreSync Job, event-publisher Deployment), and their connections to PostgreSQL, Vault (via ExternalSecret), Solace Cloud gateway, and the OTel collector.
+### Kubernetes topology
 
-**Placeholder — Phase 2 deployment flow.** To be added as `diagrams/phase2-deployment-flow.svg`. Should show: ArgoCD sync phases (PreSync → regular), verification gates, and the per-env promotion path (dev → pp → prd) with the CDC-flag toggle point.
+Namespace-level view of the Phase 2 workloads and their connections to PostgreSQL, Vault (via ExternalSecret), Solace Cloud, and the OTel collector. The event-publisher (blue border) is the only new workload; everything else existed in Phase 1.
+
+![Phase 2 Kubernetes topology](diagrams/phase2-k8s-topology.png)
+
+### Deployment flow
+
+ArgoCD sync phases (PreSync Flyway Job → workload apply) and the per-env promotion gates (dev → pp → prd). Each environment lands with `cdc.enabled: false`; the CDC flag is flipped separately once the infrastructure is verified.
+
+![Phase 2 deployment flow](diagrams/phase2-deployment-flow.png)
 
 ## Configuration Reference
 

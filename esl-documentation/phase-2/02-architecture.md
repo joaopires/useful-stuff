@@ -8,7 +8,7 @@ The CDC pipeline uses the **transactional outbox pattern**: change events are wr
 
 ## Architecture
 
-![Phase 2 Architecture](diagrams/architecture.svg)
+![Phase 2 Architecture](diagrams/architecture.png)
 
 ## CDC Data Flow
 
@@ -17,7 +17,7 @@ The CDC data flow adds three steps to the existing upsert path:
 1. **Pre-fetch** — Before upserting a batch, the sink queries the current state of the target rows within a database transaction
 2. **Classify** — Each incoming record is compared against the pre-fetched state:
    - Existing `status` already `DELETED` and incoming `status` also `DELETED` → no event (skip fast)
-   - Incoming `status` is `DELETED` (transition or first-contact tombstone) → **DELETED** (payload: empty)
+   - Incoming `status` is `DELETED` (transition or initial full sync) → **DELETED** (payload: empty)
    - Key not found → **CREATED** (payload: full record snapshot)
    - Key found, fields differ → **UPDATED** (payload: changed fields as old/new diffs)
    - Key found, all fields identical → no event
