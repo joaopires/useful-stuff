@@ -97,15 +97,15 @@ PostgreSQL: UPSERT (writes status + deletion_date + deleted_at + last_updated_at
 | Metrics | **Separate counters** — `ProductsDeleted`, `LabelsDeleted` alongside existing `ProductsProcessed`, `LabelsProcessed` | Observability distinguishes tombstone volume from live-data throughput |
 | Datafetch visibility | `deletion_date` queryable (where present); `deleted_at` internal (excluded like `created_at` / `last_updated_at`) | Matches existing internal/external distinction |
 
-## Proposed decision (please confirm or override)
+## Locked decisions (continued)
 
-### DELETED event payload shape
+### DELETED event payload shape — LOCKED
 
-**Proposal:** Full snapshot of the record's final state — all business fields, `status: "DELETED"`, `deletion_date` (set for products; may be NULL for labels), `deleted_at` set. Same shape as CREATED; consumers receive everything needed to act on the deletion.
+**Decision:** Minimal payload — `entity_key` + `send_date` + `event_id`. No full snapshot, no diff-style.
 
-**Alternatives:**
-- Minimal: `entity_key` + `status` + `deleted_at`
-- Diff-style: `status: {old: "ACTIVE", new: "DELETED"}, deleted_at: T`
+### Key not in DB + incoming `status: DELETED` — LOCKED
+
+**Decision:** Emit a single DELETED event (same minimal payload). The record is written to the DB with deletion columns populated.
 
 ## Components affected
 
@@ -170,11 +170,11 @@ ColStatus     = "status"  // if not already present
   - Before the existing CREATED/UPDATED decision, check `status` transition.
   - If existing record has `status != "DELETED"` **and** incoming has `status == "DELETED"` → classify DELETED.
   - Inject `record.RawData[ColDeletedAt] = batchTimestamp` so the UPSERT writes both columns together.
-  - Build DELETED payload from the incoming record's final-state fields (per proposed decision).
-- **Edge cases** to define during implementation:
+  - Build DELETED payload: minimal — `entity_key` + `send_date` + `event_id`.
+- **Edge cases** (locked):
   - Incoming `status == "DELETED"` and existing also `"DELETED"`: no event (already deleted).
   - Incoming non-`DELETED` status and existing `"DELETED"` (theoretical undelete): fall through to regular UPDATED classification — no explicit "resurrected" type.
-  - Key not in DB but incoming `status == "DELETED"`: classify as CREATED-then-DELETED? Simplest: classify as DELETED (emit single DELETED event). Alternative: emit both CREATED and DELETED. Document the chosen behaviour.
+  - Key not in DB but incoming `status == "DELETED"`: emit a single DELETED event (same minimal payload). Record written to DB with deletion columns populated.
 
 #### `internal/sink/postgres/query.go`
 
@@ -303,7 +303,8 @@ Integration (`cdc_integration_test.go`):
 
 ## Deliverables checklist
 
-- [ ] Payload shape decision locked
+- [x] Payload shape decision locked (minimal: entity_key + send_date + event_id)
+- [x] Key-not-in-DB edge case locked (emit single DELETED event)
 - [ ] database: V1.0.0.19 migration merged (+ optional products backfill)
 - [ ] datapipeline: client + stream methods + models + config + cdc + query + sync (metrics) + tests merged
 - [ ] datafetch: entities.yaml updated for products + labels
