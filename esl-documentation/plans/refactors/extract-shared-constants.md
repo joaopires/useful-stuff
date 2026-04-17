@@ -4,7 +4,7 @@
 **Depends on:** event-publisher implementation (step 6 complete)
 **Status:** Done (esl-common, database migration, datapipeline, datafetch, event-publisher, Phase 2 docs all complete)
 
-**Follow-up:** [fix-store-sync-state-retail-chain.md](fix-store-sync-state-retail-chain.md) — the store ID stripping creates a collision risk in `store_sync_state` that requires adding `retail_chain_id` to the table. Must be completed before deployment.
+**Follow-up:** [store-sync-state-retail-chain.md](store-sync-state-retail-chain.md) — the store ID stripping creates a collision risk in `store_sync_state` that requires adding `retail_chain_id` to the table. Must be completed before deployment.
 
 ## Motivation
 
@@ -204,7 +204,7 @@ This matches the migrated `store_sync_state` table which will already have clean
    d. Verify: `make lint && go test -tags=integration ./...`
 6. Update Phase 2 documentation (`04-datapipeline.md`, `05-event-publisher.md`)
 
-**Deployment:** Step 6e ([fix-store-sync-state-retail-chain.md](fix-store-sync-state-retail-chain.md)) must be completed before deployment — it modifies the same V1.0.0.15 migration and the datapipeline state code. ArgoCD handles the rest: Flyway (step 2) runs as PreSync before the datapipeline (step 3) and event-publisher (step 5) deploy.
+**Deployment:** Step 6e ([store-sync-state-retail-chain.md](store-sync-state-retail-chain.md)) must be completed before deployment — it modifies the same V1.0.0.15 migration and the datapipeline state code. ArgoCD handles the rest: Flyway (step 2) runs as PreSync before the datapipeline (step 3) and event-publisher (step 5) deploy.
 
 ## Verification
 

@@ -140,17 +140,17 @@ Documentation should be written incrementally — each completed scoped plan pro
 
 ## Scoped Plans
 
-- [phase2-cdc-shared-package.md](phase2-cdc-shared-package.md) — esl-go-commons repo (entity types, event types)
-- [phase2-cdc-postgres-package.md](phase2-cdc-postgres-package.md) — esl-go-commons postgres package (pool config, error classification)
-- [phase2-cdc-database.md](phase2-cdc-database.md) — Flyway migrations for outbox table
-- [refactor-entity-type-aliases.md](refactor-entity-type-aliases.md) — esl-common type aliases + datapipeline entity constant adoption
-- [refactor-adopt-common-postgres.md](refactor-adopt-common-postgres.md) — datapipeline: adopt esl-common postgres package (pool + errors + test fix)
-- [phase2-cdc-datapipeline.md](phase2-cdc-datapipeline.md) — CDC detection in the sink
-- [go-solace-sdk-implementation.md](/Users/joaopires/Projects/sonae/esl/plans/go-solace-sdk-implementation.md) — Solace Go client library (separate repo)
-- [phase2-cdc-event-publisher.md](phase2-cdc-event-publisher.md) — New publisher service
-- [refactor-outbox-uuid-primary-key.md](refactor-outbox-uuid-primary-key.md) — Change outbox id from BIGSERIAL to UUID for deterministic eventId and at-least-once deduplication
-- [phase2-cdc-explicit-timestamps.md](phase2-cdc-explicit-timestamps.md) — Explicit audit timestamps for entity/outbox consistency
-- [refactor-extract-shared-constants.md](refactor-extract-shared-constants.md) — Extract entity field names + fix composite store IDs
-- [fix-store-sync-state-retail-chain.md](fix-store-sync-state-retail-chain.md) — Add retail_chain_id to store_sync_state (required after store ID stripping)
-- [phase2-cdc-k8s-helm.md](phase2-cdc-k8s-helm.md) — Helm chart changes
-- [phase2-cdc-deleted-detection.md](phase2-cdc-deleted-detection.md) — DELETED event detection for products + labels via Vusion `deleted=true` flag, soft-delete (`deletion_date` + `deleted_at`)
+- [cdc-shared-package.md](cdc-shared-package.md) — esl-go-commons repo (entity types, event types)
+- [cdc-postgres-package.md](cdc-postgres-package.md) — esl-go-commons postgres package (pool config, error classification)
+- [cdc-database.md](cdc-database.md) — Flyway migrations for outbox table
+- [entity-type-aliases.md](../refactors/entity-type-aliases.md) — esl-common type aliases + datapipeline entity constant adoption
+- [adopt-common-postgres.md](../refactors/adopt-common-postgres.md) — datapipeline: adopt esl-common postgres package (pool + errors + test fix)
+- [cdc-datapipeline.md](cdc-datapipeline.md) — CDC detection in the sink
+- [go-solace-sdk-implementation.md](../go-solace-sdk-implementation.md) — Solace Go client library (separate repo)
+- [cdc-event-publisher.md](cdc-event-publisher.md) — New publisher service
+- [outbox-uuid-primary-key.md](../refactors/outbox-uuid-primary-key.md) — Change outbox id from BIGSERIAL to UUID for deterministic eventId and at-least-once deduplication
+- [cdc-explicit-timestamps.md](cdc-explicit-timestamps.md) — Explicit audit timestamps for entity/outbox consistency
+- [extract-shared-constants.md](../refactors/extract-shared-constants.md) — Extract entity field names + fix composite store IDs
+- [store-sync-state-retail-chain.md](../refactors/store-sync-state-retail-chain.md) — Add retail_chain_id to store_sync_state (required after store ID stripping)
+- [cdc-k8s-helm.md](cdc-k8s-helm.md) — Helm chart changes
+- [cdc-deleted-detection.md](cdc-deleted-detection.md) — DELETED event detection for products + labels via Vusion `deleted=true` flag, soft-delete (`deletion_date` + `deleted_at`)

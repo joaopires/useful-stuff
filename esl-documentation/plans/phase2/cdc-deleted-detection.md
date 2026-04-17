@@ -244,8 +244,8 @@ Integration (`cdc_integration_test.go`):
 | `phase-2/03-database.md` | Document V1.0.0.19; add `deletion_date` / `deleted_at` rows to products schema; add `deleted_at` (and `deletion_date` per branch) to labels schema; note stores / access_points have no deletion support |
 | `phase-2/04-datapipeline.md` | New subsection **Deletion detection**: VLink `deleted=true` mechanics, scope (products + labels), dual-timestamp soft-delete pattern, `status == "DELETED"` transition classifier, no separate DELETE execution path, `ProductsDeleted` / `LabelsDeleted` metrics. Remove "No DELETED event detection" from Known Limitations |
 | `phase-2/05-event-publisher.md` | Add DELETED event JSON example alongside CREATED; confirm topic table covers `deleted` as a `{messageType}` value |
-| `plans/phase2-cdc-masterplan.md` | Add step 11 **DELETED event detection** in the Status table; add this plan to the Scoped Plans list |
-| `plans/phase2-cdc-deleted-detection.md` | **This plan** (updates as decisions lock in and probe resolves) |
+| `plans/phase2/cdc-masterplan.md` | Add step 11 **DELETED event detection** in the Status table; add this plan to the Scoped Plans list |
+| `plans/phase2/cdc-deleted-detection.md` | **This plan** (updates as decisions lock in and probe resolves) |
 
 ## Implementation order
 
