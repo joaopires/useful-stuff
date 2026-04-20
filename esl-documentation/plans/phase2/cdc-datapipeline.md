@@ -93,7 +93,7 @@ All CDC logic lives in a `CDC` struct with two public methods. The sink delegate
 // CDC coordinates change detection for the transactional outbox pattern.
 type CDC struct {
     schema  string
-    logger  *logger.Logger
+    logger  *zap.Logger
     metrics *telemetry.Metrics
 }
 
@@ -526,23 +526,23 @@ func (s *PostgresSink) executeBatchWithCDC(ctx, records) ([]recordFailure, error
 **In `CDC.DetectChanges`** — log + metrics:
 
 ```go
-c.logger.WithFields(map[string]interface{}{
-    "batch_size":      len(records),
-    "cdc_created":     createdCount,
-    "cdc_updated":     updatedCount,
-    "cdc_unchanged":   unchangedCount,
-    "cdc_fetch_ms":    fetchDuration.Milliseconds(),
-    "cdc_classify_ms": classifyDuration.Milliseconds(),
-}).Info("CDC change detection completed")
+c.logger.Info("CDC change detection completed",
+    zap.Int("batch_size", len(records)),
+    zap.Int("cdc_created", createdCount),
+    zap.Int("cdc_updated", updatedCount),
+    zap.Int("cdc_unchanged", unchangedCount),
+    zap.Int64("cdc_fetch_ms", fetchDuration.Milliseconds()),
+    zap.Int64("cdc_classify_ms", classifyDuration.Milliseconds()),
+)
 ```
 
 **In `CDC.WriteOutbox`** — log + metrics:
 
 ```go
-c.logger.WithFields(map[string]interface{}{
-    "event_count":   len(events),
-    "cdc_outbox_ms": duration.Milliseconds(),
-}).Debug("CDC outbox write")
+c.logger.Debug("CDC outbox write",
+    zap.Int("event_count", len(events)),
+    zap.Int64("cdc_outbox_ms", duration.Milliseconds()),
+)
 ```
 
 **OTel metrics** (via existing `telemetry.Metrics`):

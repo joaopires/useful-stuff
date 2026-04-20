@@ -68,7 +68,7 @@ All CDC logic lives in a single file (`internal/sink/postgres/cdc.go`) as an enc
 
 ```go
 type CDC struct {
-    logger  *logger.Logger
+    logger  *zap.Logger
     metrics *telemetry.Metrics
 }
 ```
