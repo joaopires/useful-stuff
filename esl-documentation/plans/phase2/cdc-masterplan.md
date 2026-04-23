@@ -97,6 +97,8 @@ Connector → Transformer → Sink ──┐
 | 9 | k8s helm | PR open (2026-04-15, k8s PR #30) |
 | 10 | DOCS: deployment, operations | Done (2026-04-15) |
 | 11 | DELETED event detection (pulled forward from Phase 3) | Done (2026-04-16) — database, datapipeline, datafetch, event-publisher, docs merged; e2e pending |
+| 12a | go-solace-sdk: OAuth2 E2E test (Keycloak + Solace) | Done (2026-04-23, commit 63525b5) — per [event-publisher-oauth2.md](../event-publisher-oauth2.md) Phase A |
+| 12b | event-publisher: adopt OAuth2 (`auth_scheme` config) | Pending — per [event-publisher-oauth2.md](../event-publisher-oauth2.md) Phase B; requires SDK bump to ≥ 63525b5 |
 
 ## Documentation
 
