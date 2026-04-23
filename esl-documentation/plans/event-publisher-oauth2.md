@@ -645,7 +645,12 @@ Then:
 1. Steps 1-7 from the event-publisher plan above
 2. `make lint && go test -tags=integration ./...`
 
-Note: Phase B does **not** require calling `solace.WithHTTPClient` unless the deployed IdP presents a cert the system trust store won't validate (self-signed, private CA, mTLS). In production with a public-CA-signed Keycloak/Auth0/Okta, the default client works.
+**TLS in the target k8s deployment — no client-side cert handling required:**
+
+- **Solace broker (SMF over `tcps://`):** the SDK's default is `WithTLS(false, false)` — cert and date validation off. The client accepts whatever cert the broker presents. No trust-store or `WithTLS(...)` call needed in Phase B.
+- **IdP (OAuth2 token endpoint):** the SDK's default `http.Client` uses the pod's system trust store. In-cluster Keycloak (or a public-CA-signed IdP) is validated automatically. `solace.WithHTTPClient` is the escape hatch only if the IdP presents a cert the trust store rejects (self-signed, private CA not rolled into the pod image) — not the case for the production deployment.
+
+Bottom line: Phase B code changes are purely config-plumbing. No TLS setup, no `WithHTTPClient`, no `WithTLS` call is needed.
 
 ---
 
