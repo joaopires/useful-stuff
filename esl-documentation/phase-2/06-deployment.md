@@ -25,8 +25,13 @@ Before deploying Phase 2, the following must be in place:
 - **New:** `{vaultBasePath}/solace` with properties:
   - `host` — Solace Cloud broker endpoint (e.g., `tcps://mr-abc.messaging.solace.cloud:55443`)
   - `vpn` — Message VPN name
-  - `username` — broker authentication username
-  - `password` — broker authentication password
+  - `auth_scheme` — `oauth2` in deployed environments (`basic` only for local dev)
+  - `client_id` — OAuth2 client ID issued by the IdP
+  - `client_secret` — OAuth2 client secret
+  - `token_endpoint` — OAuth2 token endpoint URL (`https://...`)
+  - `scope` — OAuth2 scope requested when acquiring tokens
+
+  Basic-auth entries (`username`, `password`) are not used by the deployed service but remain valid inputs for the same config keys when `auth_scheme: basic`, which is how local docker-compose setups are wired.
 
 The event-publisher's ExternalSecret references both `{vaultBasePath}/database` (reuses the same credentials as datapipeline) and `{vaultBasePath}/solace`. Missing entries cause the ExternalSecret reconcile to fail and block pod startup.
 
@@ -134,6 +139,7 @@ ArgoCD sync phases (PreSync Flyway Job → workload apply) and the per-env promo
 Phase 2 does not introduce new top-level Helm values beyond:
 
 - `dataPipeline.config.cdc.enabled` — bool, default `false`. Controls whether the datapipeline sink writes to `event_outbox`.
+- `dataPipeline.suspend` — bool, default unset. When `true`, forces the datapipeline CronJob into a suspended state on top of the active/passive cluster check (`clusterName != activeCluster`). Useful for ad-hoc maintenance pauses on the active cluster without changing `activeCluster`. The override is one-way: setting it to `false` cannot un-suspend a passive cluster — the cluster check still wins.
 - `eventPublisher.*` — full event-publisher component configuration. See [05-event-publisher.md](05-event-publisher.md) for the complete schema.
 
 Per-env overrides live in `clusters/cluster-{env}/values-{env}.yaml`. Security rules (Solace Cloud egress) live in `clusters/cluster-{env}/values-security-{env}.yaml`.

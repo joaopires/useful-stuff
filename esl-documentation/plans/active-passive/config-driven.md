@@ -28,6 +28,31 @@ Extend the same `activeCluster` gating to `event-publisher`. This:
 - Halves DB polling and Solace sessions (from the event-publisher Deployment).
 - Eliminates the backlog-recovery ordering risk on event-publisher.
 
+## Current status (2026-04-24)
+
+### Phase A
+
+- Steps 1–3 done. Chart changes merged via PR #33 (2026-04-22) in `sonaemc-instore/lac1041-instoreorchestrator_esl`. Follow-up PR #41 (branch `feat/datapipeline-suspend-override`, targets `testing`, open as of 2026-04-24) adds a manual `dataPipeline.suspend` override on top of the cluster check — see Step 3e.
+- Steps 4–6 not yet executed. No dev/pp/prd rollout verification observed yet.
+- Step 8 partial: a `dataPipeline.suspend` bullet was added to `phase-2/06-deployment.md` Configuration Reference (2026-04-24). The `phase-2/07-operations.md` "Active/Passive Failover" section and the `esl_datapipeline_no_successful_run_36h` alert are still outstanding.
+
+### Phase B
+
+Blocked on PR #30 merge in the k8s repo. No work started.
+
+### Open prerequisites
+
+- Prereq 3 — Vusion quota reset mechanics (calendar-day vs rolling 24h) still unconfirmed.
+- Prd cluster-pair confirmation — `activeCluster: oshift-prd-rba1` has been added to `values-prd.yaml` (on PR #41) as a starting value, but ops sign-off of the active/passive pair (and the passive cluster name) is outstanding. Step 1's prd row still reads TBD.
+
+### Next up (pickup point)
+
+1. Confirm prereq 3 (Vusion quota reset mechanics) before the PP failover test in Step 5.
+2. Execute Step 4 — dev rollout verification (single cluster; CronJob `suspend` should be `false`, one scheduled run, one `esl.sync_state` row).
+3. Execute Step 5 — PP rollout and failover toggle.
+4. Confirm prd cluster-pair with ops; update Step 1's table and `values-prd.yaml` accordingly.
+5. Start Step 8: draft the "Active/Passive Failover" section in `phase-2/07-operations.md` (mechanism overview + failover steps + note on `dataPipeline.suspend`) and add the `esl_datapipeline_no_successful_run_36h` Prometheus alert.
+
 ## Scope
 
 - **Phase A (in scope now)**
@@ -92,7 +117,7 @@ Confirmed cluster identity strings (2026-04-22):
 |---|---|---|
 | dev | `rba-d1` | n/a (single cluster) |
 | pp | `oshift-pp-rba1` | `oshift-pp-mts1` |
-| prd | TBD | TBD |
+| prd | `oshift-prd-rba1` (tentative, added to `values-prd.yaml` 2026-04-24 — awaiting ops sign-off) | TBD |
 
 ### ~~Step 2 — Foundations repo `helmParameters`~~ DONE
 
@@ -144,13 +169,21 @@ spec:
 
 **3c. Update CLAUDE.md guidance** in `esl/k8s/CLAUDE.md` to clarify that the rule against `if .Values.X` conditional guards around whole resources still holds, but render-time boolean / conditional expressions on first-class fields (`suspend`, `replicas`) are acceptable.
 
+**3e. Manual `dataPipeline.suspend` override (PR #41, open 2026-04-24).** Extends the suspend expression with an optional `dataPipeline.suspend` flag:
+
+```yaml
+suspend: {{ or $dp.suspend (ne .Values.clusterName .Values.activeCluster) }}
+```
+
+Setting `dataPipeline.suspend: true` in any env values file force-suspends the CronJob on top of the cluster check — useful for ad-hoc maintenance pauses on the active cluster without touching `activeCluster`. One-way: `suspend: false` cannot un-suspend a passive cluster. Unset/`false` preserves the original cluster-based behavior.
+
 **3d. Verification:**
 
 - Run `helm lint` against all three env values files as usual (existing CI already does this).
 - Run `helm template` locally with `--set clusterName=oshift-pp-rba1` and `--set clusterName=oshift-pp-mts1` to confirm `suspend` flips correctly.
 - Open PR to testing branch, let the testing cluster exercise it.
 
-### Step 4 — Dev rollout
+### Step 4 — Dev rollout — PENDING
 
 After PR merges and is promoted to dev:
 
@@ -159,7 +192,7 @@ After PR merges and is promoted to dev:
 2. Observe one scheduled datapipeline run; confirm `esl.sync_state` shows one row.
 3. Dev has a single cluster so no failover test is possible here — proceed to PP.
 
-### Step 5 — PP rollout
+### Step 5 — PP rollout — PENDING
 
 Promoted once dev runs for at least one full scheduled window without regression.
 
@@ -170,11 +203,13 @@ Promoted once dev runs for at least one full scheduled window without regression
 
 Datapipeline schedule in PP: `00 12 * * *` (noon).
 
-### Step 6 — Production rollout
+### Step 6 — Production rollout — PENDING
 
 After PP stable for ≥ 1 week with at least one successful manually-triggered failover. Prd cluster names must be confirmed before this step.
 
-- Add `activeCluster` to `values-prd.yaml` with the chosen primary cluster name.
+Note (2026-04-24): `activeCluster: oshift-prd-rba1` has already been added to `values-prd.yaml` on PR #41 as a tentative value. Confirm with ops before the 19:00 Lisbon window on rollout day, and update this step's sub-bullets if the active cluster differs. The passive prd cluster name is still TBD — needed for runbook completeness.
+
+- ~~Add `activeCluster` to `values-prd.yaml` with the chosen primary cluster name.~~ Tentatively done on PR #41 (`oshift-prd-rba1`) — confirm with ops.
 - Deploy during a low-traffic window (outside 19:00 Lisbon).
 - Wait for 19:00. Confirm:
   - Active cluster: `orchestrator-esl-datapipeline-<timestamp>` Job exists and runs.
@@ -182,7 +217,7 @@ After PP stable for ≥ 1 week with at least one successful manually-triggered f
   - `esl.sync_state`: exactly one row for `esl-orchestrator-prd` with the expected timestamp.
   - Vusion quota usage (ops dashboard) halved relative to prior baseline.
 
-### Step 7 — Phase B: extend to event-publisher (after PR #30 merges)
+### Step 7 — Phase B: extend to event-publisher (after PR #30 merges) — BLOCKED ON PR #30
 
 After Phase 2 k8s PR #30 is merged and event-publisher is deployed:
 
@@ -195,14 +230,22 @@ spec:
 
 This preserves the existing `replicaCount` semantics for the active cluster (default 1, overridable) while forcing 0 on the passive cluster. Same `activeCluster` value already in place — no values file changes needed.
 
-### Step 8 — Runbook + observability
+### Step 8 — Documentation + observability — PARTIAL
 
-- Write a short failover runbook at `esl-documentation/runbooks/esl-orchestrator-failover.md` (create `runbooks/` dir if not present) covering:
-  - How to identify primary cluster is unhealthy.
+Done (2026-04-24):
+
+- `dataPipeline.suspend` bullet added to `esl-documentation/phase-2/06-deployment.md` Configuration Reference (covers the override added in Step 3e).
+
+Still outstanding:
+
+- Add an "Active/Passive Failover" section to `esl-documentation/phase-2/07-operations.md` so it ships in the phase 2 PDF handover. Cover:
+  - Mechanism overview: `clusterName` (injected by ArgoCD `helmParameters`) vs `activeCluster` (shared values file) drives CronJob `suspend` at render time. Mention the `dataPipeline.suspend` override for ad-hoc maintenance pauses.
+  - How to identify the primary cluster is unhealthy.
   - How to edit `activeCluster` in the correct env's values file.
   - How to confirm Argo applied the change on both clusters.
   - Post-failover verification: CronJob `suspend` flipped, next scheduled run fires on new cluster.
   - Rollback (flip the value back).
+  - Note that this is a temporary manual mechanism pending automatic failover (Option 3).
 - Add Prometheus alert (place in `values-observability.yaml` alongside existing alerts):
   - `esl_datapipeline_no_successful_run_36h` — fires if `esl.sync_state` has no `sync_status = 'SUCCESS'` row for `esl-orchestrator-prd` in the last 36 hours.
   - After Phase B: `esl_eventpublisher_no_active_pod` — fires if both clusters' event-publisher Deployments show 0 ready replicas for >5 min.
@@ -217,7 +260,7 @@ This preserves the existing `replicaCount` semantics for the active cluster (def
 - [ ] One scheduled datapipeline window observed: only the active cluster's Job is created.
 - [ ] `esl.sync_state` shows exactly one success row per schedule tick.
 - [ ] Failover test executed in PP (flip `activeCluster`, confirm CronJob suspend flips, flip back).
-- [ ] Runbook published.
+- [ ] "Active/Passive Failover" section added to `phase-2/07-operations.md`.
 - [ ] `esl_datapipeline_no_successful_run_36h` alert configured.
 
 ### Phase B (after PR #30, sign off per environment)

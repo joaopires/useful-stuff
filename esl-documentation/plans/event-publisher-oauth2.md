@@ -668,13 +668,13 @@ Bottom line: Phase B code changes are purely config-plumbing. No TLS setup, no `
 
 ### event-publisher
 
-- [ ] **Prerequisite:** bump `github.com/sonaemc-instore/lac1041-instoreorchestrator_esl-gosolacesdk` in `go.mod` to ≥ commit `63525b5` (Phase A on `main`, pushed 2026-04-23) via `go get ...@main && go mod tidy`
-- [ ] Add `AuthScheme`, `ClientID`, `ClientSecret`, `TokenEndpoint`, `Scope` to `SolaceConfig` (config.go)
-- [ ] Add same fields to `solace.Config` (client.go)
-- [ ] Update `ToClientConfig()` to pass new fields
-- [ ] Update `Validate()` with scheme-aware logic
-- [ ] Update `NewClient()` to switch on auth scheme
-- [ ] Update `config.yaml` with all new fields (commented defaults)
-- [ ] Add config validation unit tests for both auth schemes
-- [ ] Update go-solace-sdk pseudo-version in `go.mod`
-- [ ] Run `make lint && go test -tags=integration ./...`
+- [x] **Prerequisite:** bump `github.com/sonaemc-instore/lac1041-instoreorchestrator_esl-gosolacesdk` in `go.mod` to ≥ commit `63525b5` (Phase A on `main`, pushed 2026-04-23) via `go get ...@main && go mod tidy`
+- [x] Add `AuthScheme`, `ClientID`, `ClientSecret`, `TokenEndpoint`, `Scope` to `SolaceConfig` (config.go)
+- [x] Add same fields to `solace.Config` (client.go)
+- [x] Update `ToClientConfig()` to pass new fields
+- [x] Update `Validate()` with scheme-aware logic
+- [x] Update `NewClient()` to switch on auth scheme
+- [x] Update `config.yaml` with all new fields (commented defaults)
+- [x] Add config validation unit tests for both auth schemes
+- [x] Update go-solace-sdk pseudo-version in `go.mod`
+- [x] Run `make lint && go test -tags=integration ./...`

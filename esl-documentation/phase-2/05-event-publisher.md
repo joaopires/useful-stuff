@@ -243,8 +243,15 @@ All fields map directly to esl-common's `postgres.PoolConfig`.
 solace:
   host: tcp://localhost:55555         # tcp:// or tcps:// for TLS
   vpn: default                        # Message VPN name
+  auth_scheme: basic                  # "basic" (default) or "oauth2"
+  # Basic auth (used when auth_scheme is "basic")
   username: admin
   password: admin
+  # OAuth2 client credentials (used when auth_scheme is "oauth2")
+  # client_id: ""                     # OAuth2 client ID
+  # client_secret: ""                 # OAuth2 client secret
+  # token_endpoint: ""                # OAuth2 token endpoint URL (https://...)
+  # scope: ""                         # OAuth2 scope requested when acquiring tokens
   topic_prefix: "in-store/orchestratoresl"
   connect_timeout: "10s"              # TCP connection timeout (min: 1s)
   connect_retries: 3                  # TCP connect retry attempts
@@ -253,6 +260,8 @@ solace:
   keep_alive: "30s"                   # TCP keep-alive interval
   confirmation_timeout: "10s"         # Publish confirmation timeout
 ```
+
+`auth_scheme` selects how the publisher authenticates with the broker. Local development uses `basic` against the docker-compose Solace container. Deployed environments use `oauth2` (client-credentials flow): the SDK acquires a token from `token_endpoint` and refreshes it automatically. When `auth_scheme: oauth2`, `client_id`, `client_secret`, `token_endpoint`, and `scope` are all required; when `basic` (or unset), `username` is required.
 
 ### Publisher
 

@@ -90,7 +90,7 @@ kubectl logs -l app=orchestrator-esl-eventpublisher --since=24h | \
 **Common causes:**
 
 1. ExternalSecret has not reconciled — missing or malformed Vault entries
-2. Solace credentials invalid — authentication failure at broker
+2. Solace credentials invalid — OAuth2 token acquisition or broker authentication fails
 3. DB credentials invalid — pool fails to initialize
 
 **Diagnosis:**
@@ -105,19 +105,21 @@ kubectl get externalsecret orchestrator-esl-eventpublisher -o yaml | yq '.status
 kubectl get secret orchestrator-esl-eventpublisher -o json | jq '.data | keys'
 ```
 
-Expected keys in the resulting Secret:
+Expected keys in the resulting Secret (deployed envs use OAuth2):
 ```
 DbHost, DbPort, DbUser, DbPassword, DbName, DbSchema,
-SolaceHost, SolaceVpn, SolaceUsername, SolacePassword
+SolaceHost, SolaceVpn, SolaceAuthScheme,
+SolaceClientID, SolaceClientSecret, SolaceTokenEndpoint, SolaceScope
 ```
 
 **Fix:**
 
-- **ExternalSecret `SecretSyncedError`:** verify Vault entries at `{vaultBasePath}/solace` exist and contain `host`, `vpn`, `username`, `password`. After fixing Vault, force a refresh:
+- **ExternalSecret `SecretSyncedError`:** verify Vault entries at `{vaultBasePath}/solace` exist and contain `host`, `vpn`, `auth_scheme`, `client_id`, `client_secret`, `token_endpoint`, `scope`. After fixing Vault, force a refresh:
   ```sh
   kubectl annotate externalsecret orchestrator-esl-eventpublisher force-sync=$(date +%s) --overwrite
   ```
-- **Solace auth fails:** rotate the credential at Solace Cloud, update the corresponding Vault entry.
+- **Solace auth fails — broker rejects token:** rotate the OAuth2 client secret in the IdP, update `{vaultBasePath}/solace.client_secret` in Vault. If the broker reports issuer/audience/scope mismatch, verify the OAuth profile on the broker still trusts the IdP's issuer and that the requested `scope` matches what the profile expects.
+- **Solace auth fails — token endpoint unreachable:** confirm the IdP's TLS cert is trusted by the pod's system trust store (pod logs will show `x509: certificate signed by unknown authority`) and that egress to the `token_endpoint` host is allowed by the network policy.
 - **DB auth fails:** same procedure, for `{vaultBasePath}/database`.
 
 ### Outbox `PENDING` backlog is growing
