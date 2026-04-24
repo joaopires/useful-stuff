@@ -10,8 +10,8 @@ The ESL platform has three sibling Go services under `sonaemc-instore/` that sha
 
 The `datapipeline` repo fix landed in PR #30 (merged 2026-04-24). This plan applies the same fix to:
 
-- `lac1041-instoreorchestrator_esl-datafetch`
-- `lac1041-instoreorchestrator_esl-event-publisher`
+- `lac1041-instoreorchestrator_esl-datafetch` — PR #17 merged 2026-04-24 (Image Build green on CI run 24886515244)
+- `lac1041-instoreorchestrator_esl-event-publisher` — PR #3 merged 2026-04-24 (auth fix). Follow-up PR #4 (debian/glibc + CGO) merged 2026-04-24; Image Build fully green on CI run 24889432917.
 
 ## The problem (recap)
 
