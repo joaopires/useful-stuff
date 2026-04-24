@@ -285,6 +285,94 @@ If `shutdownTimeout` (default `30s`) is exceeded, Kubernetes sends SIGKILL. Cons
 - No data loss (at-least-once)
 - Possible duplicate publishes if the pre-rollback batch had partially delivered to Solace (consumers dedupe by `eventId`)
 
+## Active/Passive Failover
+
+The ESL Orchestrator is deployed to two OpenShift clusters per environment in an active/passive pattern for the datapipeline CronJob. One cluster is designated active — that's where scheduled runs fire. The other renders the same chart but with `spec.suspend: true`, so the CronJob exists but never fires. The `datafetch` REST API stays active/active across both clusters; only datapipeline is gated. Event-publisher will follow the same mechanism (`replicas: 0` on the passive cluster) once its k8s manifests land.
+
+This is a manual failover mechanism. Automatic failover based on a DB-backed lease is planned for a future release.
+
+### Mechanism
+
+Two values drive the decision at Helm render time:
+
+| Value | Source | Per cluster? |
+|---|---|---|
+| `clusterName` | Injected by ArgoCD via `helm.parameters` in each per-cluster Application | Yes — each cluster's Argo passes its own identity |
+| `activeCluster` | Top-level value in `clusters/cluster-{env}/values-{env}.yaml` | No — shared across both clusters in an environment |
+
+The datapipeline CronJob template renders:
+
+```yaml
+suspend: {{ or $dp.suspend (ne .Values.clusterName .Values.activeCluster) }}
+```
+
+On the active cluster, `clusterName == activeCluster` → `suspend: false`. On the passive cluster, `clusterName != activeCluster` → `suspend: true`.
+
+The `dataPipeline.suspend` override (see [06-deployment.md](06-deployment.md)) is an optional boolean that force-suspends the CronJob on top of the cluster check — useful for ad-hoc maintenance pauses on the active cluster without touching `activeCluster`. It is one-way: setting it to `false` cannot un-suspend the passive cluster.
+
+Cluster identities per environment:
+
+| Environment | Active | Passive |
+|---|---|---|
+| pp | `oshift-pp-rba1` | `oshift-pp-mts1` |
+| prd | `oshift-prd-rba1` | `oshift-prd-mts1` |
+
+### Identifying the active cluster as unhealthy
+
+Signals that warrant a failover:
+
+- Datapipeline has not had a successful run on the active cluster across a full schedule window (prd schedule: `00 12 * * *`).
+- OpenShift cluster-level outage affecting the active cluster (node failures, network partition, control plane degraded).
+- ArgoCD unable to sync the ESL Application on the active cluster.
+
+Quick checks:
+
+```sh
+# Latest datapipeline Job status on the active cluster
+kubectl --context <active-cluster> get jobs -n instore-esl-orchestrator-prd \
+  -l app=orchestrator-esl-datapipeline --sort-by=.status.startTime | tail -5
+
+# Latest esl.sync_state row
+psql -c "SELECT client, sync_status, sync_end_time FROM esl.sync_state
+         WHERE client = 'esl-orchestrator-prd'
+         ORDER BY sync_end_time DESC LIMIT 5;"
+```
+
+### Performing a failover
+
+1. Edit the env's values file in the `sonaemc-instore/lac1041-instoreorchestrator_esl` repo and flip `activeCluster` to the passive cluster's name. For a prd failover from `rba1` to `mts1`:
+
+   ```yaml
+   # clusters/cluster-production/values-prd.yaml
+   activeCluster: "oshift-prd-mts1"
+   ```
+
+2. Commit and push. The same values file is consumed by both per-cluster Argo Applications, so a single edit reaches both clusters.
+3. Wait for Argo to sync on both clusters (or force a sync from the Argo UI).
+
+### Post-failover verification
+
+Confirm the `suspend` flag flipped on both clusters:
+
+```sh
+# New active cluster — expect "false"
+kubectl --context <new-active> get cronjob -n instore-esl-orchestrator-prd \
+  orchestrator-esl-datapipeline -o jsonpath='{.spec.suspend}'
+
+# Old active (now passive) — expect "true"
+kubectl --context <old-active> get cronjob -n instore-esl-orchestrator-prd \
+  orchestrator-esl-datapipeline -o jsonpath='{.spec.suspend}'
+```
+
+After the next schedule tick:
+
+- A new Job is created on the new active cluster; no Job is created on the old active.
+- `esl.sync_state` shows one new row for `esl-orchestrator-prd` with the expected `sync_end_time`.
+
+### Rollback
+
+Edit the same values file and flip `activeCluster` back to the original cluster. Verification steps are identical — `suspend: false` should reappear on the original active cluster and `true` on the other.
+
 ## Disaster Recovery
 
 ### Outbox table corrupted or lost

@@ -32,8 +32,8 @@ Extend the same `activeCluster` gating to `event-publisher`. This:
 
 ### Phase A
 
-- Steps 1–3 done. Chart changes merged via PR #33 (2026-04-22) in `sonaemc-instore/lac1041-instoreorchestrator_esl`. Follow-up PR #41 (branch `feat/datapipeline-suspend-override`, targets `testing`, open as of 2026-04-24) adds a manual `dataPipeline.suspend` override on top of the cluster check — see Step 3e.
-- Steps 4–6 not yet executed. No dev/pp/prd rollout verification observed yet.
+- Steps 1–5 done. Chart changes merged via PR #33 (2026-04-22) in `sonaemc-instore/lac1041-instoreorchestrator_esl`. Follow-up PR #41 (branch `feat/datapipeline-suspend-override`, targets `testing`, open as of 2026-04-24) adds a manual `dataPipeline.suspend` override on top of the cluster check — see Step 3e. Dev and PP rollout verified on 2026-04-24, including a successful failover toggle on PP.
+- Step 6 (prd rollout) not yet executed — awaiting ≥ 1 week of PP stability.
 - Step 8 partial: a `dataPipeline.suspend` bullet was added to `phase-2/06-deployment.md` Configuration Reference (2026-04-24). The `phase-2/07-operations.md` "Active/Passive Failover" section and the `esl_datapipeline_no_successful_run_36h` alert are still outstanding.
 
 ### Phase B
@@ -42,16 +42,12 @@ Blocked on PR #30 merge in the k8s repo. No work started.
 
 ### Open prerequisites
 
-- Prereq 3 — Vusion quota reset mechanics (calendar-day vs rolling 24h) still unconfirmed.
-- Prd cluster-pair confirmation — `activeCluster: oshift-prd-rba1` has been added to `values-prd.yaml` (on PR #41) as a starting value, but ops sign-off of the active/passive pair (and the passive cluster name) is outstanding. Step 1's prd row still reads TBD.
+- None outstanding. Prd cluster-pair confirmed (2026-04-24): active `oshift-prd-rba1`, passive `oshift-prd-mts1`.
 
 ### Next up (pickup point)
 
-1. Confirm prereq 3 (Vusion quota reset mechanics) before the PP failover test in Step 5.
-2. Execute Step 4 — dev rollout verification (single cluster; CronJob `suspend` should be `false`, one scheduled run, one `esl.sync_state` row).
-3. Execute Step 5 — PP rollout and failover toggle.
-4. Confirm prd cluster-pair with ops; update Step 1's table and `values-prd.yaml` accordingly.
-5. Start Step 8: draft the "Active/Passive Failover" section in `phase-2/07-operations.md` (mechanism overview + failover steps + note on `dataPipeline.suspend`) and add the `esl_datapipeline_no_successful_run_36h` Prometheus alert.
+1. Start Step 8: draft the "Active/Passive Failover" section in `phase-2/07-operations.md` (mechanism overview + failover steps + note on `dataPipeline.suspend`) and add the `esl_datapipeline_no_successful_run_36h` Prometheus alert.
+2. After ≥ 1 week of PP stability, execute Step 6 — production rollout on `oshift-prd-rba1` / `oshift-prd-mts1`.
 
 ## Scope
 
@@ -68,10 +64,9 @@ Blocked on PR #30 merge in the k8s repo. No work started.
 
 ## Prerequisites (resolve before starting Step 3)
 
-1. ~~**Ops confirms `clusterName` values**~~ — **DONE (2026-04-22).** Confirmed values: `rba-d1` (dev, single cluster), `oshift-pp-mts1` / `oshift-pp-rba1` (PP), prd TBD.
+1. ~~**Ops confirms `clusterName` values**~~ — **DONE (2026-04-22, prd confirmed 2026-04-24).** Confirmed values: `rba-d1` (dev, single cluster), `oshift-pp-rba1` / `oshift-pp-mts1` (PP), `oshift-prd-rba1` / `oshift-prd-mts1` (prd).
 2. ~~**ArgoCD `helmParameters` set up**~~ — **DONE (2026-04-22).** DevOps confirmed `clusterName` is passed via `helm.parameters` in the ArgoCD Application (verified on PP).
-3. **Vusion quota reset mechanics confirmed** (calendar-day vs rolling 24h) — informs the runbook's failover urgency guidance for datapipeline.
-4. **Phase 2 k8s PR #30 merged** — required only for Phase B (event-publisher). Phase A (datapipeline) proceeds independently.
+3. **Phase 2 k8s PR #30 merged** — required only for Phase B (event-publisher). Phase A (datapipeline) proceeds independently.
 
 ## Architecture after implementation
 
@@ -117,7 +112,7 @@ Confirmed cluster identity strings (2026-04-22):
 |---|---|---|
 | dev | `rba-d1` | n/a (single cluster) |
 | pp | `oshift-pp-rba1` | `oshift-pp-mts1` |
-| prd | `oshift-prd-rba1` (tentative, added to `values-prd.yaml` 2026-04-24 — awaiting ops sign-off) | TBD |
+| prd | `oshift-prd-rba1` | `oshift-prd-mts1` |
 
 ### ~~Step 2 — Foundations repo `helmParameters`~~ DONE
 
@@ -183,7 +178,9 @@ Setting `dataPipeline.suspend: true` in any env values file force-suspends the C
 - Run `helm template` locally with `--set clusterName=oshift-pp-rba1` and `--set clusterName=oshift-pp-mts1` to confirm `suspend` flips correctly.
 - Open PR to testing branch, let the testing cluster exercise it.
 
-### Step 4 — Dev rollout — PENDING
+### ~~Step 4 — Dev rollout~~ DONE
+
+Verified on `rba-d1` (2026-04-24): CronJob `suspend: false`, scheduled run fired, `esl.sync_state` row as expected.
 
 After PR merges and is promoted to dev:
 
@@ -192,7 +189,9 @@ After PR merges and is promoted to dev:
 2. Observe one scheduled datapipeline run; confirm `esl.sync_state` shows one row.
 3. Dev has a single cluster so no failover test is possible here — proceed to PP.
 
-### Step 5 — PP rollout — PENDING
+### ~~Step 5 — PP rollout~~ DONE
+
+Verified on PP (2026-04-24): `suspend: false` on `oshift-pp-rba1`, `suspend: true` on `oshift-pp-mts1`, scheduled run fired only on the active cluster, `esl.sync_state` row as expected. Failover toggle exercised successfully (flipped `activeCluster` to `oshift-pp-mts1`, confirmed suspend flipped on both clusters, flipped back).
 
 Promoted once dev runs for at least one full scheduled window without regression.
 
@@ -205,11 +204,9 @@ Datapipeline schedule in PP: `00 12 * * *` (noon).
 
 ### Step 6 — Production rollout — PENDING
 
-After PP stable for ≥ 1 week with at least one successful manually-triggered failover. Prd cluster names must be confirmed before this step.
+After PP stable for ≥ 1 week with at least one successful manually-triggered failover. Prd clusters: active `oshift-prd-rba1`, passive `oshift-prd-mts1`.
 
-Note (2026-04-24): `activeCluster: oshift-prd-rba1` has already been added to `values-prd.yaml` on PR #41 as a tentative value. Confirm with ops before the 19:00 Lisbon window on rollout day, and update this step's sub-bullets if the active cluster differs. The passive prd cluster name is still TBD — needed for runbook completeness.
-
-- ~~Add `activeCluster` to `values-prd.yaml` with the chosen primary cluster name.~~ Tentatively done on PR #41 (`oshift-prd-rba1`) — confirm with ops.
+- ~~Add `activeCluster` to `values-prd.yaml` with the chosen primary cluster name.~~ Done on PR #41 (`oshift-prd-rba1`).
 - Deploy during a low-traffic window (outside 19:00 Lisbon).
 - Wait for 19:00. Confirm:
   - Active cluster: `orchestrator-esl-datapipeline-<timestamp>` Job exists and runs.
@@ -235,17 +232,10 @@ This preserves the existing `replicaCount` semantics for the active cluster (def
 Done (2026-04-24):
 
 - `dataPipeline.suspend` bullet added to `esl-documentation/phase-2/06-deployment.md` Configuration Reference (covers the override added in Step 3e).
+- "Active/Passive Failover" section added to `esl-documentation/phase-2/07-operations.md` — covers mechanism, cluster identities, unhealthy-cluster signals, failover procedure, post-failover verification, rollback, and the manual-pending-auto-failover status note.
 
 Still outstanding:
 
-- Add an "Active/Passive Failover" section to `esl-documentation/phase-2/07-operations.md` so it ships in the phase 2 PDF handover. Cover:
-  - Mechanism overview: `clusterName` (injected by ArgoCD `helmParameters`) vs `activeCluster` (shared values file) drives CronJob `suspend` at render time. Mention the `dataPipeline.suspend` override for ad-hoc maintenance pauses.
-  - How to identify the primary cluster is unhealthy.
-  - How to edit `activeCluster` in the correct env's values file.
-  - How to confirm Argo applied the change on both clusters.
-  - Post-failover verification: CronJob `suspend` flipped, next scheduled run fires on new cluster.
-  - Rollback (flip the value back).
-  - Note that this is a temporary manual mechanism pending automatic failover (Option 3).
 - Add Prometheus alert (place in `values-observability.yaml` alongside existing alerts):
   - `esl_datapipeline_no_successful_run_36h` — fires if `esl.sync_state` has no `sync_status = 'SUCCESS'` row for `esl-orchestrator-prd` in the last 36 hours.
   - After Phase B: `esl_eventpublisher_no_active_pod` — fires if both clusters' event-publisher Deployments show 0 ready replicas for >5 min.
