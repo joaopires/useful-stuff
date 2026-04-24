@@ -94,7 +94,8 @@ Connector → Transformer → Sink ──┐
 | 6e | fix: add retail_chain_id to store_sync_state | Done (2026-04-10) |
 | 7 | DOCS: data pipeline (CDC additions) | Done (2026-04-10) |
 | 8 | DOCS: event publisher | Done (2026-04-10) |
-| 9 | k8s helm | PR open (k8s PR #30) — image tags bumped for all 4 components, OAuth2 wired (host/vpn/tokenEndpoint/scope in values; client-id/client-secret in Vault, populated by ops), reviews pending; **blocked on Ops:** netpol egress rule for Solace broker + OAuth2 identity server |
+| 9 | k8s helm | PR open (k8s PR #30) — scoped to **dev-only rollout** (2026-04-24): image tags bumped for all 4 components in dev, event-publisher + CDC enabled in dev only, OAuth2 wired (host/vpn/tokenEndpoint/scope in values; client-id/client-secret in Vault, populated by ops). Template gated on `.Values.eventPublisher` so pp/prd render cleanly without the component. pp/prd changes preserved on branch `feature/event-publisher-pp-prd-wip` for a follow-up PR after dev is validated. **Blocked on Ops:** netpol egress rule for Solace broker + OAuth2 identity server. |
+| 9b | k8s helm: pp/prd rollout | **Not started** — follow-up PR from `feature/event-publisher-pp-prd-wip`, to be opened once step 9 (dev) is validated. pp applies when PR merges to testing; prd applies when testing merges to main. |
 | 10 | DOCS: deployment, operations | Done (2026-04-15); updated 2026-04-24 for OAuth2 Vault layout change |
 | 11 | DELETED event detection (pulled forward from Phase 3) | Done (2026-04-16) — database, datapipeline, datafetch, event-publisher, docs merged; e2e pending |
 | 12a | go-solace-sdk: OAuth2 E2E test (Keycloak + Solace) | Done (2026-04-23, commit 63525b5) — per [event-publisher-oauth2.md](../event-publisher-oauth2.md) Phase A |
