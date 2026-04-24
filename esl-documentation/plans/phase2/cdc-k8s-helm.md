@@ -31,11 +31,16 @@ sink:
 Following existing component-oriented pattern (self-contained):
 
 - ServiceAccount (`sa-orchestrator-esl-eventpublisher`)
-- ExternalSecret (DB creds from existing Vault path + Solace creds from new entries)
-- ConfigMap (publisher config: poll interval, batch size, Solace topic prefix)
+- ExternalSecret (DB creds from existing Vault path + Solace OAuth2 client credentials from new entries)
+- ConfigMap (publisher config: host, vpn, auth_scheme, token_endpoint, scope, topic_prefix, poll interval, batch size, log level)
 - Deployment (1 replica, health probes, security context matching existing pattern)
 
-New Vault secrets: `{prefix}_app_solace_host`, `{prefix}_app_solace_username`, `{prefix}_app_solace_password`
+New Vault entries at `{vaultBasePath}/solace` (KV-structured, two properties only):
+
+- `client-id` — OAuth2 client ID
+- `client-secret` — OAuth2 client secret
+
+Non-sensitive Solace config (host, vpn, token_endpoint, scope, topic_prefix) lives in the per-env values file, not Vault. `auth_scheme` is hardcoded to `oauth2` in the ConfigMap.
 
 ## 3. Values updates
 
@@ -45,57 +50,61 @@ Per-env `values-{env}.yaml`:
 dataPipeline:
   config:
     cdc:
-      enabled: true  # or false for rollout
+      enabled: false  # flip to true during event-publisher rollout
 
 eventPublisher:
-  imageTag: "placeholder"
+  imageTag: "<image tag>"
+  replicaCount: 1
+  timeZone: "Europe/Lisbon"
   config:
-    pollInterval: "1s"
-    batchSize: 100
     solace:
-      topicPrefix: "esl/events"
+      host: "event-broker-<env>.corp.mc.pt:55443"   # per-env broker host:port (tcps:// prefix added by template)
+      vpn: "<vpn-name>"                             # per-env VPN
+      tokenEndpoint: "https://identity[-pp].sonaemc.com/connect/token"
+      scope: "solace"
+      topicPrefix: "in-store/orchestratoresl"
+    publisher:
+      pollInterval: "1s"
+      batchSize: 100
+      shutdownTimeout: "30s"
+    log:
+      level: "info"
 ```
 
 Per-env `values-security-{env}.yaml`:
 
-```yaml
-netpol:
-  egress:
-    cidrs:
-      # ... existing rules ...
-      - name: solace-broker
-        host: <TBD>/32
-        ports:
-          - port: 55555  # or 443 if TLS
-            protocol: TCP
-```
+Egress rule to the Solace broker — TBD pending Ops confirmation on whether connectivity is via:
+
+- **In-cluster gateway pod** (`podsSelector` rule targeting `namespace: solace-cloud`, labels `app: solace`, port `55443`), or
+- **Direct external egress** (`cidrs` rule with the resolved broker IPs, port `55443`).
+
+OAuth2 also requires egress to the identity server (`identity[-pp].sonaemc.com`) — TBD whether the existing `internet 0.0.0.0/0 except 10.0.0.0/8 port 443` rule covers it or an explicit CIDR is needed.
 
 ## Verification
 
 - `helm template --show-only templates/eventpublisher-deployment.yaml` renders correctly (no missing required values)
 - `helm template --show-only templates/datapipeline-cronjob.yaml` includes CDC config
 
-### Solace Cloud networking
+### Solace networking
 
-The client uses Solace Cloud (SaaS). Connection is via an in-cluster gateway pod provided by Solace, not direct internet egress. NetworkPolicy egress is modelled as a `podsSelector` rule targeting `namespace: solace-cloud`, labels `app: solace`, port `55443` (TLS SMF) — the same pattern used by other projects in this cluster. No CIDR placeholder is needed.
+Integration team provided corporate broker hostnames (`event-broker-*.corp.mc.pt:55443`) for all three envs. Whether those resolve through an in-cluster gateway pod (original assumption) or require direct external egress is TBD pending Ops confirmation. Update the `values-security-{env}.yaml` egress rule once confirmed.
 
 ### Deferred items — requires real operational values
 
-`helm lint` is clean with the placeholders below. `kubectl apply` / ArgoCD will still fail on the cluster until these are replaced:
+`helm lint` is clean. `kubectl apply` / ArgoCD will still fail on the cluster until these are in place:
 
-| Placeholder | Location | Needed from | Failure mode |
+| Item | Location | Needed from | Failure mode |
 |---|---|---|---|
-| `eventPublisher.imageTag: "<TBD>"` / `"placeholder"` | `values-{env}.yaml` | Built + pushed image tag | Pod ImagePullBackOff |
-| Vault entries at `{vaultBasePath}/solace` (host, vpn, username, password) | External Vault | Ops / credentials owner | ExternalSecret reconcile fails, Secret never materializes, Deployment stuck |
-| `solace-cloud` namespace / `app: solace` gateway pod | Cluster-level infra | Solace Cloud deployment (pre-existing in pp/prd clusters) | NetworkPolicy is valid but egress has no target |
+| Vault entries at `{vaultBasePath}/solace` (`client-id`, `client-secret`) per env | External Vault | Ops (already populated per user) | ExternalSecret reconcile fails, Secret never materializes, Deployment stuck |
+| NetworkPolicy egress rule for Solace broker (gateway pod or external CIDR) | `values-security-{env}.yaml` | Ops (connectivity model TBD) | Pod starts but readiness fails (publisher can't reach broker) |
+| NetworkPolicy egress rule for OAuth2 identity server | `values-security-{env}.yaml` | Ops (confirm CIDR vs existing internet rule) | Pod starts but readiness fails (token acquisition blocked) |
 
 When real values land:
 
-1. Replace imageTag placeholders across all 3 env files
-2. Ensure Vault `{vaultBasePath}/solace` entries exist
-3. Re-run `helm lint` across all clusters (loop from k8s CLAUDE.md) — should still be 0 errors
-4. `helm template` + diff against `kubectl apply --dry-run=server` to catch API-level validation
-5. Flip `dataPipeline.config.cdc.enabled` to `true` per env once the publisher is verified
+1. Update `values-security-{env}.yaml` with the confirmed egress rules
+2. Re-run `helm lint` across all clusters (loop from k8s CLAUDE.md) — should still be 0 errors
+3. `helm template` + diff against `kubectl apply --dry-run=server` to catch API-level validation
+4. Flip `dataPipeline.config.cdc.enabled` to `true` per env once the publisher is verified
 
 ## Diagrams
 

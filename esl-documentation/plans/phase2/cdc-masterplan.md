@@ -94,8 +94,8 @@ Connector → Transformer → Sink ──┐
 | 6e | fix: add retail_chain_id to store_sync_state | Done (2026-04-10) |
 | 7 | DOCS: data pipeline (CDC additions) | Done (2026-04-10) |
 | 8 | DOCS: event publisher | Done (2026-04-10) |
-| 9 | k8s helm | PR open (2026-04-15, k8s PR #30) |
-| 10 | DOCS: deployment, operations | Done (2026-04-15) |
+| 9 | k8s helm | PR open (k8s PR #30) — image tags bumped for all 4 components, OAuth2 wired (host/vpn/tokenEndpoint/scope in values; client-id/client-secret in Vault, populated by ops), reviews pending; **blocked on Ops:** netpol egress rule for Solace broker + OAuth2 identity server |
+| 10 | DOCS: deployment, operations | Done (2026-04-15); updated 2026-04-24 for OAuth2 Vault layout change |
 | 11 | DELETED event detection (pulled forward from Phase 3) | Done (2026-04-16) — database, datapipeline, datafetch, event-publisher, docs merged; e2e pending |
 | 12a | go-solace-sdk: OAuth2 E2E test (Keycloak + Solace) | Done (2026-04-23, commit 63525b5) — per [event-publisher-oauth2.md](../event-publisher-oauth2.md) Phase A |
 | 12b | event-publisher: adopt OAuth2 (`auth_scheme` config) | Done (2026-04-23) — per [event-publisher-oauth2.md](../event-publisher-oauth2.md) Phase B; SDK bumped to pseudo-version containing 63525b5 |

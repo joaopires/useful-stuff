@@ -22,16 +22,11 @@ Before deploying Phase 2, the following must be in place:
 ### 1. Vault entries
 
 - `{vaultBasePath}/database` — existing (Phase 1), no changes
-- **New:** `{vaultBasePath}/solace` with properties:
-  - `host` — Solace Cloud broker endpoint (e.g., `tcps://mr-abc.messaging.solace.cloud:55443`)
-  - `vpn` — Message VPN name
-  - `auth_scheme` — `oauth2` in deployed environments (`basic` only for local dev)
-  - `client_id` — OAuth2 client ID issued by the IdP
-  - `client_secret` — OAuth2 client secret
-  - `token_endpoint` — OAuth2 token endpoint URL (`https://...`)
-  - `scope` — OAuth2 scope requested when acquiring tokens
+- **New:** `{vaultBasePath}/solace` with two properties (OAuth2 client credentials):
+  - `client-id` — OAuth2 client ID issued by the IdP
+  - `client-secret` — OAuth2 client secret
 
-  Basic-auth entries (`username`, `password`) are not used by the deployed service but remain valid inputs for the same config keys when `auth_scheme: basic`, which is how local docker-compose setups are wired.
+The remaining Solace config (`host`, `vpn`, `token_endpoint`, `scope`, `topic_prefix`) is non-sensitive and lives in the per-env values file (`eventPublisher.config.solace.*`). `auth_scheme` is hardcoded to `oauth2` in the ConfigMap — basic auth is only used in local docker-compose and is not wired into the chart.
 
 The event-publisher's ExternalSecret references both `{vaultBasePath}/database` (reuses the same credentials as datapipeline) and `{vaultBasePath}/solace`. Missing entries cause the ExternalSecret reconcile to fail and block pod startup.
 

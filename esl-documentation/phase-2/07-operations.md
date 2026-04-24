@@ -105,20 +105,21 @@ kubectl get externalsecret orchestrator-esl-eventpublisher -o yaml | yq '.status
 kubectl get secret orchestrator-esl-eventpublisher -o json | jq '.data | keys'
 ```
 
-Expected keys in the resulting Secret (deployed envs use OAuth2):
+Expected keys in the resulting Secret:
 ```
 DbHost, DbPort, DbUser, DbPassword, DbName, DbSchema,
-SolaceHost, SolaceVpn, SolaceAuthScheme,
-SolaceClientID, SolaceClientSecret, SolaceTokenEndpoint, SolaceScope
+SolaceClientId, SolaceClientSecret
 ```
+
+Non-sensitive Solace config (`host`, `vpn`, `auth_scheme`, `token_endpoint`, `scope`, `topic_prefix`) is sourced from the ConfigMap, not the Secret.
 
 **Fix:**
 
-- **ExternalSecret `SecretSyncedError`:** verify Vault entries at `{vaultBasePath}/solace` exist and contain `host`, `vpn`, `auth_scheme`, `client_id`, `client_secret`, `token_endpoint`, `scope`. After fixing Vault, force a refresh:
+- **ExternalSecret `SecretSyncedError`:** verify Vault entries at `{vaultBasePath}/solace` exist and contain `client-id` and `client-secret`. After fixing Vault, force a refresh:
   ```sh
   kubectl annotate externalsecret orchestrator-esl-eventpublisher force-sync=$(date +%s) --overwrite
   ```
-- **Solace auth fails — broker rejects token:** rotate the OAuth2 client secret in the IdP, update `{vaultBasePath}/solace.client_secret` in Vault. If the broker reports issuer/audience/scope mismatch, verify the OAuth profile on the broker still trusts the IdP's issuer and that the requested `scope` matches what the profile expects.
+- **Solace auth fails — broker rejects token:** rotate the OAuth2 client secret in the IdP, update `{vaultBasePath}/solace.client-secret` in Vault. If the broker reports issuer/audience/scope mismatch, verify the OAuth profile on the broker still trusts the IdP's issuer and that the requested `scope` (in the env values file under `eventPublisher.config.solace.scope`) matches what the profile expects.
 - **Solace auth fails — token endpoint unreachable:** confirm the IdP's TLS cert is trusted by the pod's system trust store (pod logs will show `x509: certificate signed by unknown authority`) and that egress to the `token_endpoint` host is allowed by the network policy.
 - **DB auth fails:** same procedure, for `{vaultBasePath}/database`.
 
