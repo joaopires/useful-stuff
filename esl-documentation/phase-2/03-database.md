@@ -135,8 +135,24 @@ Only delivered events are eligible for cleanup. Events with status `PENDING` or 
 | V1.0.0.18 | Create `event_outbox` UUID primary key and retention function |
 | V1.0.0.19 | Add `deletion_date` to labels; add `deleted_at` to products and labels |
 | V1.0.0.20 | Increase entity ID columns (`item_id`, `label_id`, `access_points.id`) to VARCHAR(255) |
+| V1.0.0.21 | Reset role-level `statement_timeout` set by V13 (see PgBouncer compatibility below) |
 
 These migrations follow the same conventions established in Phase 1: table and indexes in separate files, snake_case naming, all objects in the `esl` schema.
+
+### PgBouncer compatibility (V1.0.0.13 + V1.0.0.21)
+
+PgBouncer in transaction pool mode rejects any client whose `StartupMessage` carries unknown runtime parameters with `SQLSTATE 08P01`. Two parameters in particular show up in the wild:
+
+| Parameter | Sent by | Resolution |
+|---|---|---|
+| `extra_float_digits = 3` | pgJDBC 42.x (Flyway) at startup | Stripped by PgBouncer's `ignore_startup_parameters`; restored server-side via V13's `ALTER ROLE ... SET extra_float_digits = 3` |
+| `statement_timeout` | pgJDBC 42.x (Flyway) at startup | Stripped by PgBouncer's `ignore_startup_parameters`; **not** restored server-side — V13 originally set it to `'30s'`, V21 resets it (see below) |
+
+V13's `statement_timeout = '30s'` line was a copy-paste of a JDBC-compat recipe and turned out to be a footgun: it pinned every future Flyway migration to a 30s server-side cap, which silently fails any legitimately long DDL (`CREATE INDEX CONCURRENTLY` on a large `esl.labels`, for example). V21 issues `ALTER ROLE %I RESET statement_timeout` against the same `current_user` V13 wrote to. After V13 + V21 apply, `pg_roles.rolconfig` for the migration user is `{extra_float_digits=3}` with no `statement_timeout`.
+
+Per-query timeouts in the Go services are enforced via `context.Context` deadlines in application code, not via a server-side cap — so V21 sets no replacement value. The same reasoning is documented on `commonpg.NewPool`'s godoc.
+
+The companion change in `esl-common` removed `RuntimeParams["search_path"]` from pool creation (it tripped the same 08P01 for every Go service); every consumer now qualifies its SQL via `commonpg.Schema` rather than relying on session `search_path`. See the `search-path-to-schema-qualified` plan for the full PR sequence.
 
 ### Deletion columns (V1.0.0.19)
 

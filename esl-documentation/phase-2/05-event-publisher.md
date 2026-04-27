@@ -224,7 +224,7 @@ database:
   user: esl
   password: ""
   database: eslorchestrator
-  schema: esl                        # Sets search_path at pool level
+  schema: esl                        # Schema under which event_outbox lives; every query qualifies it explicitly
   ssl_mode: disable
   application_name: "event-publisher"
   max_conns: 4

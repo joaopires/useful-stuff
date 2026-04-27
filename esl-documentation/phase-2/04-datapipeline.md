@@ -68,12 +68,14 @@ All CDC logic lives in a single file (`internal/sink/postgres/cdc.go`) as an enc
 
 ```go
 type CDC struct {
-    logger  *zap.Logger
-    metrics *telemetry.Metrics
+    logger      *zap.Logger
+    metrics     *telemetry.Metrics
+    schema      commonpg.Schema
+    outboxTable string
 }
 ```
 
-The struct holds no schema reference — the outbox table name is unqualified (the search path handles schema resolution). It exposes two methods:
+The struct carries the schema binding from `esl-common` and pre-computes the schema-qualified outbox identifier (e.g. `"esl"."event_outbox"`) once at construction, so every event INSERT carries an explicit `schema.table` reference rather than relying on `search_path` resolution. It exposes two methods:
 
 - **`DetectChanges`** — fetches existing state within the transaction, classifies each record, and returns a slice of `event.ChangeEvent`
 - **`WriteOutbox`** — inserts change events into the outbox within the same transaction
