@@ -1,13 +1,13 @@
 # Migration Plan: PostgreSQL `search_path` → Schema-Qualified Queries
 
-**Status:** All changes shipped 2026-04-27 (datapipeline #31 still open at time of writing). PR E (database V21) and the doc-only common follow-up rounded out the refactor.
+**Status:** All changes shipped and merged 2026-04-27. Five planned PRs (A–E) plus a doc-only follow-up in `common` (#3, the `context.Context` timeout note) all in main.
 
 | PR | Repo | Branch | # |
 |----|------|--------|---|
 | A | `common` | `feature/schema-qualified-queries` | [#2](https://github.com/sonaemc-instore/lac1041-instoreorchestrator_esl-common/pull/2) — merged 2026-04-27 at `5ed113a` |
 | B | `datafetch` | `feature/schema-qualified-queries` | [#18](https://github.com/sonaemc-instore/lac1041-instoreorchestrator_esl-datafetch/pull/18) — merged 2026-04-27 at `9e02b8c` |
 | C | `event-publisher` | `feature/schema-qualified-queries` | [#5](https://github.com/sonaemc-instore/lac1041-instoreorchestrator_esl-eventpublisher/pull/5) — merged 2026-04-27 at `a28a2e7` |
-| D | `datapipeline` | `feature/schema-qualified-queries` | [#31](https://github.com/sonaemc-instore/lac1041-instoreorchestrator_esl-datapipeline/pull/31) — open |
+| D | `datapipeline` | `feature/schema-qualified-queries` | [#31](https://github.com/sonaemc-instore/lac1041-instoreorchestrator_esl-datapipeline/pull/31) — merged 2026-04-27 at `41821ce` |
 | E | `database` (V21) | `main` (direct push) | shipped 2026-04-27 at `b83d91b` |
 
 Audience: ESL platform engineers
