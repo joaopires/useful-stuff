@@ -136,7 +136,8 @@ Only delivered events are eligible for cleanup. Events with status `PENDING` or 
 | V1.0.0.19 | Add `deletion_date` to labels; add `deleted_at` to products and labels |
 | V1.0.0.20 | Increase entity ID columns (`item_id`, `label_id`, `access_points.id`) to VARCHAR(255) |
 | V1.0.0.21 | Reset role-level `statement_timeout` set by V13 (see PgBouncer compatibility below) |
-| V1.0.0.22 | Add correlation columns to `records_with_errors`; extend `sync_state.sync_status` CHECK with `running` |
+| V1.0.0.22 | Add correlation columns (`run_id`, `retail_chain_id`, `store_id`, `pipeline_name`, `entity_type`) and supporting indexes to `records_with_errors` |
+| V1.0.0.23 | Drop the `UNIQUE` qualifier on `idx_ap_mac_address` and `idx_ap_serial_number`; both kept as plain B-Tree indexes for hardware-id lookups |
 
 These migrations follow the same conventions established in Phase 1: table and indexes in separate files, snake_case naming, all objects in the `esl` schema.
 
