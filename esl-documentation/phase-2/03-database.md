@@ -190,3 +190,17 @@ Full indexes on `occurred_at` or `delivered_at` would include all rows. Partial 
 ### Retention via function, not trigger
 
 Unlike Phase 1's `sync_state` tables which use `AFTER INSERT` triggers for retention, the outbox uses an explicitly called function. This avoids adding cleanup overhead to every pipeline transaction — retention runs on its own schedule, independent of the write path.
+
+## `store_sync_state` semantics
+
+The Phase 1 `store_sync_state` table is unchanged structurally in Phase 2 but its `sync_status` column is now sourced from sink truth, not connector enqueue:
+
+| Status | Trigger |
+|---|---|
+| `success` | Streaming finished AND every emitted record was acked with no persistence error |
+| `failed` | Connector-side fetch error, OR sink-side persistence error (constraint violation, batch rollback), OR an "ack leak" where streaming finished but the pending counter is non-zero |
+| `cancelled` | Streaming for the store never finished because another store's failure aborted the run |
+
+Practically, this means a store whose labels triggered a unique-constraint violation in the sink now correctly surfaces as `failed` (with the PG error in `error_message`) rather than `success`. The watermark for that store does not advance, so the next run will retry the failed records.
+
+The `*_processed` columns (`products_processed`, `labels_processed`, `access_points_processed`) reflect records that **persisted** in the destination, not records emitted to the sink channel.

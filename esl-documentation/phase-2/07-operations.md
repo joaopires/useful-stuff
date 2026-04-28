@@ -196,6 +196,48 @@ FROM esl.event_outbox
 WHERE id = 'your-uuid-here';
 ```
 
+### Recover from a falsely-successful store run
+
+A pre–PR-2 run could mark a store as `success` while the sink was silently dropping records (e.g. unique-constraint violations cascading through a pgx batch). The watermark advanced past the failed records, so the next incremental run skipped them. After PR 2 such runs surface as `failed` and the watermark stays put — but historical leaks need a one-time manual recovery.
+
+**Symptoms.** A store row in `store_sync_state` has `sync_status = 'success'` but the destination table has fewer rows than `*_processed` reports, and `records_with_errors` either contains entries for that run or is suspiciously empty for the same `synced_at`.
+
+**Recovery (widen lookback for one run).** Roll back the affected store's watermark by the smallest interval that covers the missed records, then trigger a normal run:
+
+```sql
+-- Replace <pipeline>, <retail_chain> and <store> with the affected values.
+UPDATE esl.store_sync_state
+   SET synced_at = synced_at - INTERVAL '6 hours'
+ WHERE pipeline_name = '<pipeline>'
+   AND retail_chain_id = '<retail_chain>'
+   AND store_id = '<store>'
+   AND id = (
+     SELECT MAX(id) FROM esl.store_sync_state
+      WHERE pipeline_name = '<pipeline>'
+        AND retail_chain_id = '<retail_chain>'
+        AND store_id = '<store>');
+```
+
+**Alternative.** Bump the orchestrator's `sync.lookback_window` config to a value large enough to cover the gap and run once; revert to the normal window afterwards.
+
+After the recovery run, verify: the store should show `success` with a `*_processed` count consistent with the destination table, and `records_with_errors` should reflect any rows that genuinely failed permanent validation.
+
+### Ack-leak warning in pipeline logs
+
+A log line like the following surfaces from `cmd/eslorchestrator/run.go` after `pipeline.Run` returns:
+
+```json
+{"level":"warn","msg":"ack leak detected after pipeline run","total_pending":42,"by_store":{"<store>":42}}
+```
+
+This always indicates a code defect — either a pipeline-side drop site that forgot to invoke the OutcomeHandler, or a sink that violated the contract that requires reporting every record before `Close` returns. The corresponding store(s) get classified as `failed: ack leak: N records unaccounted for` in `store_sync_state` so the watermark does not advance.
+
+Triage:
+
+- Cross-reference the affected store IDs with recent connector / sink changes.
+- The pipeline's `processRecord` calls the OutcomeHandler on transform/preprocess errors and the sink reports per-record outcomes via `flushBatch`, the `Write()` boundary rejection branch, and `drainOnCancel` on shutdown — any new drop site must do the same.
+- Re-run the pipeline once the underlying defect is fixed; the records sit untouched at the source so they will re-emit cleanly.
+
 ### Drain the outbox urgently (emergency only)
 
 If a backlog is safe to discard (e.g., accumulated test data, intentional rollback), mark events as DELIVERED without publishing:

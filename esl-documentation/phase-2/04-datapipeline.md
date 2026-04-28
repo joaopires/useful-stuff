@@ -87,9 +87,9 @@ Two functions were extracted from the original `executeBatch` to avoid duplicati
 | Helper | Purpose |
 |---|---|
 | `buildUpsertBatch` | Builds a `pgx.Batch` with upsert queries for all records |
-| `sendAndProcessBatch` | Processes batch results from any sender (pool or transaction), with a `failFast` parameter controlling error strategy |
+| `sendAndProcessBatch` | Walks the batch results and returns per-record outcomes aligned with the input records, plus the classified trigger error |
 
-The non-CDC path calls these with `failFast=false` (collect all failures). The CDC path calls them with `failFast=true` (return on first error, enabling clean rollback).
+Both paths call `sendAndProcessBatch` with the same signature. The non-CDC path additionally runs a per-record fallback after a batch failure (see [Error Handling](#error-handling)). The CDC path collapses any failure into uniform `rolledBackErr` outcomes after the rollback.
 
 ## Change Detection
 
@@ -243,16 +243,80 @@ If CDC overhead becomes a bottleneck, the following optimisations are available:
 
 ## Error Handling
 
-### Fail-fast semantics
+### Per-record outcome reporting
 
-Unlike the non-CDC path (which collects all failures and continues), the CDC path fails fast on the first error. This is required because partial upserts combined with partial outbox writes would be invalid — the transaction must be all-or-nothing.
+The sink reports the persistence outcome of each record back to the pipeline via an `OutcomeHandler` callback installed on the sink at startup:
 
-When a batch fails:
+```go
+type OutcomeHandler func(record *models.Record, err error)
 
-1. The transaction is rolled back (no upserts, no outbox writes)
-2. A single `recordFailure` is returned containing the first failing record
-3. The error is propagated via `Ack(err)` to all records in the batch
-4. The retry mechanism re-attempts the entire batch (up to `max_retries`)
+type Sink interface {
+    Write(ctx context.Context, record *models.Record) error
+    Close() error
+    SetOutcomeHandler(h OutcomeHandler)
+}
+```
+
+The contract: sinks must invoke the handler exactly once per record before `Close` returns, with `err == nil` on successful persistence and a non-nil error on permanent failure. The handler is the canonical mechanism for the connector and metrics layer to learn what actually persisted (vs. what was merely emitted to the sink channel).
+
+### pgx batch transactional model
+
+`pool.SendBatch` runs all queued queries in an implicit transaction: PostgreSQL aborts the transaction on any error and rolls back even queries that `br.Exec` reported as successful. This means the per-record `Exec` results are not the source of truth on failure — the only safe interpretation of a failed batch is "all records rolled back, none persisted".
+
+The non-CDC and CDC paths handle this divergence differently because their atomicity contracts differ.
+
+### Non-CDC path: per-record fallback
+
+When `executeBatch` runs against the pool and the batch fails, every record is re-executed individually via `pool.Exec`. Each runs in its own implicit transaction and gets its true outcome:
+
+- Records with valid data persist on the second attempt.
+- The genuine violator(s) fail with their real PG error, classified by the existing error machinery.
+- Outcomes are then dispatched per-record to the `OutcomeHandler`.
+
+The fallback's overhead is bounded: it only triggers after a batch failure, only for the failed batch, and the happy path stays fully pipelined. Records past the trigger no longer carry the cached pgx cascade error in their outcomes — each record's outcome reflects whether it actually persisted.
+
+### CDC path: uniform rolledBackErr
+
+`executeBatchWithCDC` wraps the batch, change detection, and outbox writes in a single explicit transaction. Per-record retries outside this transaction would break the upsert/outbox atomicity contract, so the CDC path does not run the fallback. Instead:
+
+- Commit succeeds → every record's outcome is `nil`.
+- Anything fails (`DetectChanges`, batch upsert, `WriteOutbox`, or commit itself) → every record's outcome carries `rolledBackErr`, which wraps the underlying root cause via `%w`. Downstream callers can use `errors.As` to recover the original `*pgconn.PgError` for classification.
+
+The `rolledBackErr` synthesises a uniform per-record error from a single source of truth (the commit result), avoiding the need to interpret poisoned `br.Exec` results.
+
+### Outcome-driven store completion
+
+The pipeline tracks a per-store **pending** counter to detect ack leaks and to drive store-level status classification. The flow:
+
+- `RecordEmitted(storeID)` is called after every record successfully enters the sink-bound channel and increments the store's pending counter.
+- `RecordPersisted(record, err)` is the body of the OutcomeHandler. It decrements pending, increments either the per-store persisted counter (on success) or the per-store persistence-failure counter (on failure), and notifies the Phase 1 store gate when the record is store-typed.
+- `MarkStoreStreamingDone(storeID)` is called when Phase 2 finishes streaming records for a store (`processStoreEntities` returns nil).
+
+A store reaches the **success** branch only when streaming finished AND every emitted record was acked. A non-zero pending counter after `sink.Close` always signals a code defect — either a pipeline-side drop site that forgot to report or a sink that violated the OutcomeHandler contract — and surfaces as `failed: ack leak: N records unaccounted for` in the per-store run.
+
+The Phase 1 store gate is now metrics-driven. The connector emits N store records, then calls `WaitForStoreRecords(ctx, N)`, which blocks until N store-typed records have been reported via `RecordPersisted`. `Record.Ack` is gone; one shared OutcomeHandler installed by the pipeline builder is the only mechanism.
+
+### Per-store status resolution
+
+`failureStatusResolver` walks four signals in priority order:
+
+1. Connector-side error (e.g. failed Vusion API fetch) → `failed` with the connector error message.
+2. Sink-side persistence error (first message wins per store) → `failed` with `"persistence: <msg>"`.
+3. Streaming never finished → `cancelled: another store failed`.
+4. Streaming finished but pending != 0 → `failed: ack leak: N records unaccounted for`.
+
+Otherwise the store is `success`. The same resolver is used on both the success and failure pipeline-run paths so a store with persistence failures cannot masquerade as `success` even when the global pipeline finished cleanly.
+
+### `*_processed` columns: persisted, not emitted
+
+`StoreSyncRun.{Products,Labels,AccessPoints}Processed` now reflects records that **actually persisted** in the destination, not records emitted to the sink channel. The previous "emitted" semantics conflated successful enqueue with successful write — a store with constraint-violating labels would report `labels_processed = 427` while only ~80 rows landed in the labels table. The honest count comes from `GetStorePersistedMetrics`, populated by the OutcomeHandler.
+
+### Records-with-errors accuracy
+
+Only records that genuinely fail contribute to the `records_with_errors` table. Specifically:
+
+- **Non-CDC**: only the records whose individual fallback `pool.Exec` fails are inserted. The cascade no longer produces false positives for records past the trigger.
+- **CDC**: only the trigger record (or the genuine source of failure, e.g. an `DetectChanges` query error) is inserted, since the rollback prevents any record from being persisted.
 
 ### Error classification
 

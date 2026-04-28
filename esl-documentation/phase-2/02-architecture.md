@@ -105,3 +105,12 @@ The Event Publisher uses `SELECT FOR UPDATE SKIP LOCKED` to claim outbox rows. T
 ### Feature flag
 
 CDC is gated behind a `cdc.enabled` configuration flag in the sink. When disabled, the pipeline behaves exactly as in Phase 1 — no transaction wrapper, no pre-fetch, no outbox writes.
+
+### Per-record outcome reporting
+
+The sink reports the persistence outcome of each record back to the rest of the pipeline through an `OutcomeHandler` callback installed at startup. The handler is invoked exactly once per record before `Close` returns — `nil` on successful persistence, a non-nil error on permanent failure. This contract decouples the sink from the connector's bookkeeping: the connector and metrics layer learn what actually persisted (vs. what was merely emitted to the sink channel), without the sink needing to know which `(store, entity)` tuple a record belongs to.
+
+Two implementation details follow from PostgreSQL's batch semantics:
+
+- **Non-CDC**: `pool.SendBatch` runs all queued queries in an implicit transaction, so a single failure rolls back even queries whose `br.Exec` reported success. The sink recovers the per-record truth by re-executing every record individually via `pool.Exec` after a batch failure — each runs in its own implicit transaction and gets its true outcome. Records whose data is valid persist; only the genuine violators carry a non-nil error in their outcome.
+- **CDC**: the explicit transaction wrapping the batch + outbox writes makes per-record retries unsafe (they would break upsert/outbox atomicity). Outcomes are uniform: commit-success → all `nil`; any failure → all records carry a `rolledBackErr` wrapping the root cause.
