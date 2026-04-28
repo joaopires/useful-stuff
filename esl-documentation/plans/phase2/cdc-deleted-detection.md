@@ -377,3 +377,15 @@ Integration (`cdc_integration_test.go`):
 - [x] Phase 2 docs (§01, §02, §03, §04, §05) updated
 - [x] Masterplan updated with step 11
 - [x] Manual e2e verification in dev env (2026-04-16): 6,030 product + 630 label tombstones, all deleted_at set, 6,660 DELETED outbox events with empty payload, Solace delivery confirmed
+
+---
+
+## Implementation note (2026-04-28)
+
+This plan describes `deleted=true` as the always-on VLink fetch behavior — that was correct at plan time (the param was hardcoded). It is no longer accurate: the param is now gated by `sink.postgres.cdc.enabled`. When CDC is on, list calls include `deleted=true` exactly as designed here. When CDC is off, the param is omitted at the source so deleted rows never enter the pipeline.
+
+**Why the change**: with CDC disabled, the sink discards DELETED records anyway (the deletion-event path is unreachable when `s.cdc == nil`). Fetching them at the source was wasted work and added an asymmetry between "CDC truly off" and "CDC off but pipeline still walks tombstones." Coupling the two flags makes CDC=off a clean no-op end-to-end.
+
+**Where it lives now**: `vlink.NewClient` takes an `includeDeleted bool` parameter; the orchestrator computes it from `cfg.Sink.Postgres.CDC.Enabled` at startup. See `phase-2/04-datapipeline.md` § Feature Flag for the up-to-date description.
+
+The classifier, query, and outbox logic described in this plan are unchanged and remain correct.

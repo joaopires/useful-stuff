@@ -104,7 +104,7 @@ The Event Publisher uses `SELECT FOR UPDATE SKIP LOCKED` to claim outbox rows. T
 
 ### Feature flag
 
-CDC is gated behind a `cdc.enabled` configuration flag in the sink. When disabled, the pipeline behaves exactly as in Phase 1 — no transaction wrapper, no pre-fetch, no outbox writes.
+CDC is gated behind a `cdc.enabled` configuration flag in the sink. When disabled, the pipeline behaves exactly as in Phase 1 — no transaction wrapper, no pre-fetch, no outbox writes, and the VLink connector skips fetching deleted rows.
 
 ### Per-record outcome reporting
 

@@ -32,6 +32,8 @@ sink:
 
 When `cdc.enabled` is `false`, the sink dispatches batches through the original non-transactional path. When `true`, the sink wraps each batch in a transaction and delegates change detection and outbox writes to the CDC module.
 
+The flag also gates the VLink connector's `deleted=true` query param: when CDC is on, list calls include soft-deleted rows so DELETED events can be emitted; when CDC is off, the param is omitted and deleted rows are skipped at the source. This keeps both ends consistent — there is no value in fetching deleted rows the sink would discard.
+
 The flag is evaluated once at startup in the sink builder — the `CDC` struct is only instantiated when enabled. At runtime, the dispatch check is a nil pointer comparison (`s.cdc != nil`), not a config lookup.
 
 ## Architecture
