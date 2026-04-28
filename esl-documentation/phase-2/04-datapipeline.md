@@ -254,6 +254,7 @@ type Sink interface {
     Write(ctx context.Context, record *models.Record) error
     Close() error
     SetOutcomeHandler(h OutcomeHandler)
+    SetRunID(runID int64)
 }
 ```
 
@@ -317,6 +318,38 @@ Only records that genuinely fail contribute to the `records_with_errors` table. 
 
 - **Non-CDC**: only the records whose individual fallback `pool.Exec` fails are inserted. The cascade no longer produces false positives for records past the trigger.
 - **CDC**: only the trigger record (or the genuine source of failure, e.g. an `DetectChanges` query error) is inserted, since the rollback prevents any record from being persisted.
+
+### Records-with-errors correlation
+
+Each row inserted into `records_with_errors` carries five correlation columns that pin the failure to a specific run, store, and pipeline:
+
+| Column | Source |
+|---|---|
+| `run_id` | Sink's runID field, populated via `SetRunID(int64)` at run start (after `InsertRun` returns) |
+| `retail_chain_id` | `record.RawData["retail_chain_id"]` — the post-normalizer field name |
+| `store_id` | `record.RawData["store_id"]` — the **stripped** form, matching `products.store_id`. The `{retail_chain}.{store}` composite returned by Vusion is stripped at the connector boundary and never reaches the sink |
+| `pipeline_name` | Sink's pipelineName field, set once via `WithPipelineName(name)` on the sink builder |
+| `entity_type` | `record.Metadata["type"]` (`store`, `product`, `label`, `accesspoint`) |
+
+**`SetRunID` is a setter, not a constructor parameter or context value.** A setter keeps the sink reusable across runs (no per-run rebuild), keeps the dependency explicit at the call site (no `ctx.Value` lookups), and is trivial to mock in tests. The trade is that callers must remember to invoke it; missing the call is non-fatal — `run_id` ends up NULL via `NULLIF($n, 0)`, and downstream queries already need to handle NULL for backward compatibility with pre-PR-3 rows.
+
+`pipeline_name` follows a different shape because it doesn't change between runs: it's set on the sink builder via `WithPipelineName(name)` and stays put for the sink's lifetime. Same NULL-tolerant treatment applies if the builder option is omitted.
+
+Typical correlation queries:
+
+```sql
+-- All failed records for one run, grouped by store
+SELECT retail_chain_id, store_id, entity_type, COUNT(*)
+  FROM esl.records_with_errors
+ WHERE run_id = $1
+ GROUP BY retail_chain_id, store_id, entity_type;
+
+-- Recent failed records for a specific store (across runs)
+SELECT run_id, created_at, error_message
+  FROM esl.records_with_errors
+ WHERE retail_chain_id = $1 AND store_id = $2
+ ORDER BY id DESC LIMIT 50;
+```
 
 ### Error classification
 

@@ -52,6 +52,34 @@ SELECT pg_size_pretty(pg_total_relation_size('esl.event_outbox')) AS total_size,
 FROM esl.event_outbox;
 ```
 
+### Pipeline run lifecycle (`sync_state`)
+
+The orchestrator inserts a `sync_state` row with `sync_status = 'running'` at the start of each run and updates it to `success` / `failed` at the end (see [03-database.md](03-database.md)). A handful of queries cover the common operational checks:
+
+```sql
+-- Live runs right now (one row per pipeline expected; multiple = concurrency issue)
+SELECT pipeline_name, id AS run_id, started_at,
+       NOW() - started_at AS age
+  FROM esl.sync_state
+ WHERE sync_status = 'running'
+ ORDER BY started_at;
+
+-- Most recent run per pipeline with outcome
+SELECT DISTINCT ON (pipeline_name)
+       pipeline_name, sync_status, started_at, finished_at,
+       finished_at - started_at AS duration, error_message
+  FROM esl.sync_state
+ ORDER BY pipeline_name, started_at DESC;
+
+-- Runs swept on startup as orphaned (post-PR-3 indicator of a previous crash)
+SELECT pipeline_name, id, started_at, finished_at
+  FROM esl.sync_state
+ WHERE error_message = 'orphaned by orchestrator restart'
+ ORDER BY finished_at DESC LIMIT 20;
+```
+
+**Alerting note.** Time-windowed alerts on `sync_status = 'failed'` should restrict to `finished_at` within the window, not `started_at` — a `running` row started just before the window has not failed yet, only its eventual terminal update would land inside the window.
+
 ### Publisher metrics (OpenTelemetry)
 
 The event-publisher exports OTel metrics via the shared collector:
@@ -221,6 +249,54 @@ UPDATE esl.store_sync_state
 **Alternative.** Bump the orchestrator's `sync.lookback_window` config to a value large enough to cover the gap and run once; revert to the normal window afterwards.
 
 After the recovery run, verify: the store should show `success` with a `*_processed` count consistent with the destination table, and `records_with_errors` should reflect any rows that genuinely failed permanent validation.
+
+### Stale `running` row at startup (orphan sweep fired)
+
+On startup, the orchestrator looks for `sync_state` rows belonging to its `pipeline_name` that are still in `running` and flips them to `failed` with `error_message = 'orphaned by orchestrator restart'`. A log line surfaces only when the sweep actually updates rows:
+
+```json
+{"level":"info","msg":"Swept orphaned running rows","count":1,"pipeline_name":"esl-orchestrator-pp"}
+```
+
+This means the previous orchestrator instance for this pipeline died between the start-of-run insert and the end-of-run update — typical causes: pod OOMKilled, node eviction, hard shutdown without SIGTERM, an unhandled panic. The swept row's `started_at` is the timestamp the dead run began; subtract it from the sweep time to estimate how long it was orphaned.
+
+**Pipeline-name uniqueness is the safety boundary.** The sweep matches strictly on `pipeline_name` and treats every `running` row in scope as dead. If two orchestrators share the same `pipeline_name` and run at the same time, the second one's startup will mark the first one's in-flight row as `failed` while the first is still alive (concurrent orchestrators on a single pipeline-name is documented as out of scope — see [04-datapipeline.md](04-datapipeline.md)).
+
+Triage:
+
+- Cross-reference the `started_at` of the swept row with pod restart events / kubelet logs to confirm a crash occurred.
+- The records the orphaned run was processing remain at the source — the next normal run picks them up via the unchanged `store_sync_state` watermarks.
+- A swept row with `started_at` far in the past (hours+) usually indicates the orchestrator was disabled rather than crashed; double-check the deployment was intentional.
+
+If the sweep itself fails (state DB briefly unreachable at startup), a warn log fires and the new running row is still inserted — the next successful startup eventually catches up.
+
+### Investigate failed records for a specific run
+
+After PR 3, every row in `records_with_errors` carries `run_id`, `retail_chain_id`, `store_id`, `pipeline_name`, and `entity_type`. Use them to triage a specific failed run:
+
+```sql
+-- All failures for the most recent failed run on a pipeline
+WITH latest AS (
+  SELECT id FROM esl.sync_state
+   WHERE pipeline_name = '<pipeline>'
+     AND sync_status = 'failed'
+   ORDER BY started_at DESC LIMIT 1
+)
+SELECT entity_type, retail_chain_id, store_id,
+       COUNT(*) AS failures,
+       array_agg(DISTINCT pg_error_code) AS pg_codes
+  FROM esl.records_with_errors
+ WHERE run_id = (SELECT id FROM latest)
+ GROUP BY entity_type, retail_chain_id, store_id
+ ORDER BY failures DESC;
+
+-- One specific failing record's payload + classification
+SELECT data, error_message, pg_error_code, error_type
+  FROM esl.records_with_errors
+ WHERE run_id = $1 AND record_id = $2;
+```
+
+**Pre-PR-3 rows.** Rows older than the V1.0.0.22 migration carry NULL in all five correlation columns. Dashboards and ad-hoc queries that filter on `run_id` should `WHERE run_id IS NOT NULL` (or accept that pre-migration data is invisible to the new query patterns).
 
 ### Ack-leak warning in pipeline logs
 

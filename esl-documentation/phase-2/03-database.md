@@ -136,6 +136,7 @@ Only delivered events are eligible for cleanup. Events with status `PENDING` or 
 | V1.0.0.19 | Add `deletion_date` to labels; add `deleted_at` to products and labels |
 | V1.0.0.20 | Increase entity ID columns (`item_id`, `label_id`, `access_points.id`) to VARCHAR(255) |
 | V1.0.0.21 | Reset role-level `statement_timeout` set by V13 (see PgBouncer compatibility below) |
+| V1.0.0.22 | Add correlation columns to `records_with_errors`; extend `sync_state.sync_status` CHECK with `running` |
 
 These migrations follow the same conventions established in Phase 1: table and indexes in separate files, snake_case naming, all objects in the `esl` schema.
 
@@ -204,3 +205,54 @@ The Phase 1 `store_sync_state` table is unchanged structurally in Phase 2 but it
 Practically, this means a store whose labels triggered a unique-constraint violation in the sink now correctly surfaces as `failed` (with the PG error in `error_message`) rather than `success`. The watermark for that store does not advance, so the next run will retry the failed records.
 
 The `*_processed` columns (`products_processed`, `labels_processed`, `access_points_processed`) reflect records that **persisted** in the destination, not records emitted to the sink channel.
+
+## `records_with_errors` correlation columns
+
+`esl.records_with_errors` gains five nullable columns so failed-record rows can be traced to the run, store, and pipeline that produced them:
+
+| Column | Type | Description |
+|---|---|---|
+| `run_id` | BIGINT | Foreign-key-style reference to `sync_state.id` (no FK constraint — see below) |
+| `retail_chain_id` | VARCHAR(255) | Chain the failed record belonged to, post-normalizer |
+| `store_id` | VARCHAR(255) | Store the failed record belonged to. Stripped form (`000010`) — matches `products.store_id` / `labels.store_id`, **not** the composite `{retail_chain}.{store}` returned by Vusion |
+| `pipeline_name` | VARCHAR(255) | Sourced from the orchestrator's pipeline config (set on the sink at construction) |
+| `entity_type` | VARCHAR(32) | Free-form, populated from `record.Metadata["type"]` (`store`, `product`, `label`, `accesspoint`) |
+
+Two indexes back the common query patterns:
+
+```sql
+CREATE INDEX idx_records_with_errors_run_id
+    ON esl.records_with_errors (run_id);
+CREATE INDEX idx_records_with_errors_store
+    ON esl.records_with_errors (run_id, retail_chain_id, store_id);
+```
+
+All five columns are nullable. There are two reasons:
+
+1. **Backward compatibility.** Pre-PR-3 rows pre-date the columns and exist with all five NULL. Dashboards filtering on `run_id` must handle NULL.
+2. **Tolerance for partial state.** A failure that occurs before the sink learns the run's id (e.g. the orchestrator couldn't insert the running row because the state DB was briefly unreachable) still produces a usable `records_with_errors` entry — error recording must never depend on state-store latency.
+
+There is **no foreign key** from `records_with_errors.run_id` to `sync_state.id`. Error recording must survive a `sync_state` row never being inserted at all (the running-row insert is best-effort), so coupling the two via FK would create a failure mode where a sink-side error vanishes because the state-side write never happened.
+
+`entity_type` is intentionally not constrained to an enum at the database level. The existing `table_name` column already serves as the strict identifier; `entity_type` is the looser, normalizer-level label, kept free-form for forward compatibility with new entity types.
+
+## `sync_state` lifecycle
+
+Phase 2 PR 3 introduces a running → terminal lifecycle on `esl.sync_state`. The status enum is extended:
+
+```sql
+CHECK (sync_status IN ('running','success','failed','cancelled'))
+```
+
+| Status | When the row is in this state |
+|---|---|
+| `running` | The orchestrator inserted the row at the start of a pipeline run; the run hasn't finished yet |
+| `success` / `failed` / `cancelled` | Terminal outcomes — the orchestrator updated the row at the end of the run |
+
+The orchestrator runs three operations against `sync_state` per run:
+
+1. **Sweep on startup.** `UPDATE sync_state SET sync_status = 'failed', error_message = 'orphaned by orchestrator restart', finished_at = NOW() WHERE pipeline_name = $1 AND sync_status = 'running'`. Any row left in `running` is presumed dead — its orchestrator must have crashed before reaching the terminal-update step. Pipeline-name uniqueness is the safety boundary; concurrent orchestrators on the same pipeline-name would race here, but that scenario is documented as out of scope.
+2. **Insert at start.** A new row is inserted with `sync_status = 'running'`, zero counts, and `finished_at` set to the run's start time as a placeholder.
+3. **Update at end.** The same row is finalized via `UPDATE sync_state SET sync_status = ..., counts ..., duration = ..., finished_at = ..., error_message = ... WHERE id = $1`. The row's `id` is the `run_id` written into `records_with_errors` for any record that failed during the run.
+
+A `running` row is observable while a pipeline executes — useful for live dashboards but worth being aware of when alerting on `sync_status = 'failed'` (a healthy in-flight run is `running`, not yet `success`). Time-windowed alerts should restrict to `finished_at` within the window, not `started_at`.
