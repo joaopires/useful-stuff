@@ -29,34 +29,109 @@ All four collapse into one missing primitive: **the sink does not report per-rec
 Three PRs in dependency order:
 
 1. **PR 1 — Sink correctness foundation.** Make the sink honest about per-record outcomes. No visible change in run-level behavior.
-2. **PR 2 — Ack-driven store completion.** Wire those outcomes through to per-store status, counters, and the resolver. The actual bug fix.
+2. **PR 2 — Outcome-driven store completion.** Wire those outcomes through to per-store status, counters, and the resolver. The actual bug fix.
 3. **PR 3 — Error observability.** `records_with_errors` correlation + `running` lifecycle. Independent of 1 and 2.
 
 PRs 1 and 2 are coupled (PR 2 depends on PR 1). PR 3 is orthogonal and can ship before, with, or after.
+
+## Mechanism — outcome handler
+
+Replaces the pre-existing `Record.Ack func(error)` field with a single sink-installed callback. Defined in [`internal/sink/sink.go`](internal/sink/sink.go):
+
+```go
+// OutcomeHandler reports per-record persistence outcomes. err is nil
+// on success, non-nil on permanent failure or boundary rejection.
+type OutcomeHandler func(record *models.Record, err error)
+
+type Sink interface {
+    Write(ctx context.Context, record *models.Record) error
+    Close() error
+
+    // SetOutcomeHandler installs the handler the sink must call exactly
+    // once per record before Close returns. Must be called before any
+    // Write. Sinks that drop records must still report with err=nil.
+    SetOutcomeHandler(h OutcomeHandler)
+}
+```
+
+The pipeline builder constructs ONE handler at startup, installs it on the sink, and holds a reference itself for pipeline-side drop sites (transform/preprocess errors):
+
+```go
+handler := func(record *models.Record, err error) {
+    syncMetrics.RecordPersisted(record, err)
+}
+sink.SetOutcomeHandler(handler)
+pipelineBuilder.WithOutcomeHandler(handler)
+```
+
+Why this shape and not the prior `Record.Ack` closure:
+
+- **Zero per-record allocation.** One function value installed once; no closures captured per record. The pre-revision plan §2.2 had to introduce pooled `(storeID, entityType)` callbacks (~400 closures) to dodge GC pressure on million-record runs. That whole problem disappears.
+- **Contract is type-checkable.** A new sink can't forget the contract — the method is part of the interface signature.
+- **Drop sites consistent.** Pipeline-side drops (transform error, preprocess error) call the same handler. One mechanism end-to-end.
+- **`Record.Ack` is removed.** [`internal/models/record.go`](internal/models/record.go) loses the `Ack` field. No dual-track confusion.
+
+**Phase 1 store wait** (today: `storeWg.Wait()` keyed off per-record `Ack` closures) becomes metrics-driven: emit N stores, wait until `RecordPersisted` has been called for N store-typed records (tracked via a small counter in `SyncMetrics`).
 
 ---
 
 ## PR 1 — Sink correctness foundation
 
-**Goal:** the sink calls `record.Ack(nil)` for every record that genuinely persisted and `record.Ack(err)` for every record that genuinely failed — even when pgx's batch cascade has poisoned the per-record error reporting. No external behavior change yet.
+**Goal:** the sink reports `nil` for every record that genuinely persisted and a real error for every record that genuinely failed — even when pgx's batch cascade has poisoned the per-record error reporting. No external behavior change yet (PR 1 introduces the mechanism; PR 2 wires it to per-store status).
 
 ### Changes
 
-#### 1.1 Promote Ack to a Sink interface contract
+#### 1.1 Define `OutcomeHandler` and update the `Sink` interface
 
-Update [`internal/sink/sink.go`](internal/sink/sink.go) — add doc comment to the `Sink` interface:
+In [`internal/sink/sink.go`](internal/sink/sink.go):
 
-> Sinks MUST invoke `record.Ack` exactly once per record before `Close()` returns. Pass `nil` if the record was successfully persisted, or a non-nil error if it permanently failed. Sinks that drop records (filter, deduplicate) must still Ack with `nil`.
+```go
+type OutcomeHandler func(record *models.Record, err error)
 
-This is a documentation contract; no signature change. Add an `Ack` doc on the field in [`record.go:23`](internal/models/record.go#L23) too.
+type Sink interface {
+    Write(ctx context.Context, record *models.Record) error
+    Close() error
+
+    // SetOutcomeHandler installs the callback the sink invokes for every
+    // record's persistence outcome. Must be called before any Write.
+    // Sinks MUST invoke the handler exactly once per record before Close
+    // returns. Pass nil for err on success, non-nil on permanent failure.
+    // Sinks that drop records must still report with err=nil.
+    SetOutcomeHandler(h OutcomeHandler)
+}
+```
+
+Remove the `Ack func(error)` field from [`internal/models/record.go`](internal/models/record.go). All outcome reporting flows through the sink-installed handler from this point forward. Records become pure data again.
+
+`PostgresSink` and `StdoutSink` add an `outcomeHandler OutcomeHandler` field and a `SetOutcomeHandler` method that simply assigns it. Calling `Write` before `SetOutcomeHandler` is undefined; the builder wires it before the pipeline starts (see §2.2).
+
+For sites in `PostgresSink` that need to call the handler when it might be nil (e.g. tests that don't install one), define a small helper:
+
+```go
+func (s *PostgresSink) report(record *models.Record, err error) {
+    if s.outcomeHandler != nil {
+        s.outcomeHandler(record, err)
+    }
+}
+```
 
 #### 1.2 Update stdout sink to honor the contract
 
-[`internal/sink/stdout/stdout.go`](internal/sink/stdout/stdout.go) — call `record.Ack(nil)` after each successful write, `record.Ack(err)` on failure.
+[`internal/sink/stdout/stdout.go`](internal/sink/stdout/stdout.go):
 
-#### 1.3 Per-record Ack accuracy in `flushBatch`
+```go
+func (s *StdoutSink) Write(ctx context.Context, record *models.Record) error {
+    s.logger.Info("Processed record", zap.Any("record", record))
+    if s.outcomeHandler != nil {
+        s.outcomeHandler(record, nil)
+    }
+    return nil
+}
+```
 
-Today [`postgres.go:215-218`](internal/sink/postgres/postgres.go#L215-L218) Acks all records with the same `err`. Change `writeBatch` to return per-record outcomes:
+#### 1.3 Per-record outcome accuracy in `flushBatch`
+
+Today [`postgres.go:215-218`](internal/sink/postgres/postgres.go#L215-L218) reports the same joined `err` for every record in the batch. Change `writeBatch` to surface per-record outcomes:
 
 ```go
 type recordOutcome struct {
@@ -65,7 +140,7 @@ type recordOutcome struct {
 }
 ```
 
-`flushBatch` iterates outcomes and Acks accordingly.
+`flushBatch` iterates `[]recordOutcome` and calls `s.outcomeHandler(rec.record, rec.err)` for each.
 
 #### 1.4 Outcome semantics differ between CDC and non-CDC paths
 
@@ -77,7 +152,7 @@ The two code paths produce outcomes differently because their persistence guaran
 - Record `firstFailIdx` → `{err: realPGError}` (the trigger).
 - Records `firstFailIdx+1..end` → re-execute one at a time via `pool.Exec` + `prepareQuery` (still inside `withRetry`). Each gets its own true outcome.
 
-This recovery path is the fix for finding 5 (pgx batch cascade). It runs only after a batch failure, only for records past the first failure.
+This recovery path is the fix for the pgx batch cascade. It runs only after a batch failure, only for records past the first failure.
 
 **CDC path** (`executeBatchWithCDC`): the entire batch runs inside `s.pool.Begin(ctx)`. Persistence is determined by `tx.Commit()` succeeding — `br.Exec() == nil` is necessary but not sufficient. If anything fails (`DetectChanges`, any upsert via `failFast=true`, `WriteOutbox`, or the commit itself), the deferred rollback invalidates everything.
 
@@ -87,6 +162,8 @@ Outcomes are *uniform*:
 - Anything fails → every record `{err: rolledBackErr}`, where `rolledBackErr` wraps the root cause (the originating constraint violation, outbox write failure, etc.). Records past `failFast`'s exit point — whose `br.Exec()` was never called — get the same `rolledBackErr` synthetically; we do not try to read their results from the poisoned pipeline.
 
 **The non-CDC fallback retry MUST NOT run in CDC.** Per-record retries outside the original tx would break the upsert/outbox atomicity contract. The CDC path simply produces uniform outcomes from a single source of truth (the commit result).
+
+In both paths the outcomes are reported via `s.outcomeHandler` from `flushBatch`, not from `executeBatch*` directly — keeping the reporting site in one place per call.
 
 #### 1.5 Refactor `sendAndProcessBatch` to return ordered outcomes
 
@@ -99,6 +176,8 @@ Today it returns `[]recordFailure` with no positional info. Change it to return 
 - Don't introduce a separate "single-record path" function with its own query plan caching — reuse existing `prepareQuery`.
 - The new behavior renames `lastFailures` → `outcomes` to avoid confusion in code review.
 - Synthesize `rolledBackErr` with `fmt.Errorf("rolled back due to peer record failure: %w", rootCause)` so the cause is preserved for `errors.Is`/`errors.As`.
+- `OutcomeHandler` is **never invoked** from inside `executeBatch` / `executeBatchWithCDC`. Only `flushBatch` reports outcomes — single reporting site per batch makes ordering and `recover()` semantics easy to reason about.
+- `Record.Ack` field removal is part of this PR. Pre-merge grep `internal/` and `cmd/` for `.Ack` to make sure no caller is left dangling. The only known caller today is the connector at [`sync.go:125`](internal/connector/vusion/sync.go#L125) (Phase 1 store WG), which is migrated in PR 2 §2.2.
 
 ### Tests
 
@@ -231,9 +310,21 @@ Rejected records don't leak `pending`; the store's persistence error gets record
 
 #### 2.4 Drop-site Acks
 
-Grep `internal/sink/postgres/cdc/`, `internal/pipeline/`, `internal/connector/` for places that consume a `*Record` without forwarding it (CDC no-change path is the known site). Each must call `record.Ack(nil)` explicitly.
+Each site that consumes a `*Record` without forwarding it must call `record.Ack` explicitly. The full list, established by the pre-coding grep on 2026-04-28:
 
-Document in code: *"any drop site MUST Ack(nil)"*.
+| # | Site | Reason | Ack |
+| --- | --- | --- | --- |
+| 1 | [`pipeline.go:200`](internal/pipeline/pipeline.go#L200) — transform error | `processRecord` returns `nil, err`; original input never reaches sink | `Ack(fmt.Errorf("transform failed: %w", err))` on `input` |
+| 2 | [`pipeline.go:212`](internal/pipeline/pipeline.go#L212) — preprocess error | `processRecord` returns `nil, err`; original input never reaches sink | `Ack(fmt.Errorf("preprocess failed: %w", err))` on `input` |
+| 3 | [`pipeline.go:76-82`](internal/pipeline/pipeline.go#L76-L82) — `sink.Write` returns error in `ForEach` | record returned to caller as an error and dropped | Already covered: `Write` returns the boundary-rejection error from §2.3, which Acks before returning |
+| 4 | [`vusion.go:271-279`](internal/connector/vusion/vusion.go#L271-L279) — ctx cancellation in `streamEntities` | record created but `outCh <- record` blocked, then ctx fires | `Ack` was never set yet (record assigned `Ack` only after enqueue, per §2.2). No leak — counter never incremented |
+| 5 | [`sync.go:323-329`](internal/connector/vusion/sync.go#L323-L329) — ctx cancellation in access points loop | records created but not yet sent | Same pattern as #4 — set `Ack` after enqueue, no leak |
+
+**Note on #1 and #2:** these are connector-side records (created in `vusion.go:203-209`) that pass through the transformer before failing in `processRecord`. By the time they fail, `Ack` is already set (per §2.2 it's assigned on enqueue to `outCh`). The transform/preprocess error path must call `input.Ack(err)` before returning.
+
+CDC paths (`groupByEntityType`, `classifyAndDiff`) are NOT drop sites — records skipped for event generation are still in the upsert batch and get Ack'd via `flushBatch`. Verified 2026-04-28.
+
+Document in code: *"any drop site MUST Ack"*.
 
 #### 2.5 Shutdown drain
 
@@ -423,6 +514,8 @@ entityType    string  // from record.Metadata["type"]
 
 (Field names are post-normalizer: `store_id` and `retail_chain_id`, *not* `storeId` / `retailChainId`.)
 
+**`store_id` is the stripped (clean) form.** The connector replaces the Vusion composite `{retailChainID}.{storeID}` with the bare `storeID` at [`sync.go:117-118`](internal/connector/vusion/sync.go#L117-L118) and at the access-point / product / label emission sites. By the time records reach the sink, `record.RawData["store_id"] == "000010"` — matching `products.store_id`, `labels.store_id`, etc. The composite is preserved only on the `bufferedStore` struct for VLink API calls and never reaches the sink.
+
 `storeFailedInsert` writes the new columns. `runID` comes from the sink struct.
 
 ### Code-quality notes
@@ -458,12 +551,27 @@ Schema migration is additive. Rolling back code without rolling back schema: wri
 
 ## Cross-cutting
 
-### Pre-coding verifications (must happen before PR 1 starts)
+### Pre-coding verifications (completed 2026-04-28)
 
-1. **Pipeline transform preserves Ack pointer.** Trace [`pipeline.processRecord`](internal/pipeline/pipeline.go). If it copies the record, ensure `Ack` is propagated. Add a regression test.
-2. **`sink.Close()` runs synchronously before resolver on the failure path.** [`pipeline.go:106`](internal/pipeline/pipeline.go#L106) calls Close on success; on failure, `defer cleanup()` ([`pipeline.go:149-151`](internal/pipeline/pipeline.go#L149-L151)) handles it. Confirm `cleanup` runs to completion before `pipeline.Run()` returns.
-3. **Grep all record-drop sites:** `internal/sink/postgres/cdc/`, `internal/pipeline/`, `internal/connector/`. Document the list.
-4. **Grep all `MarkStoreCompleted` / `GetCompletedStores` callers.** Confirm only `run.go` + tests.
+1. **Pipeline transform preserves Ack pointer.** ✅ Verified.
+   - [`normalizer.go:28`](internal/transformer/normalizer/normalizer.go#L28) does `out := *input` — shallow copy preserves the `Ack` function value.
+   - [`pipeline.go:170-229`](internal/pipeline/pipeline.go#L170-L229) returns the transformer's output unchanged on success.
+   - [`stream.go:190-204`](internal/stream/stream.go#L190-L204) `TransformParallel` forwards the output unchanged.
+   - **However:** when `processRecord` returns `nil, err` (transform failure at [`pipeline.go:200`](internal/pipeline/pipeline.go#L200) or preprocess failure at [`pipeline.go:212`](internal/pipeline/pipeline.go#L212)), the input record is silently dropped. These are leak sites — see §2.4 drop-site table for the fix.
+   - Add `TestPipeline_AckPropagatedThroughTransform` (success path) and `TestPipeline_AckCalledOnTransformError` / `TestPipeline_AckCalledOnPreprocessError` (failure paths) as regression tests in PR 2.
+
+2. **`sink.Close()` runs synchronously before resolver on the failure path.** ✅ Verified.
+   - Happy path: explicit Close at [`pipeline.go:106`](internal/pipeline/pipeline.go#L106).
+   - Failure path: `defer cleanup()` at [`pipeline.go:44`](internal/pipeline/pipeline.go#L44) calls Close at [`pipeline.go:149`](internal/pipeline/pipeline.go#L149).
+   - `Close` is idempotent (uses `closeOnce` at [`postgres.go:283`](internal/sink/postgres/postgres.go#L283)).
+   - Both paths Close before `Run` returns. Resolver in `cmd/eslorchestrator/run.go` runs after `Run` returns. Ordering is correct.
+
+3. **Record-drop sites in `internal/sink/postgres/`, `internal/pipeline/`, `internal/connector/`.** ✅ Documented in §2.4 above. CDC paths (`groupByEntityType`, `classifyAndDiff`) are NOT drop sites — verified that records skipped for *event* generation are still in the upsert batch and Ack'd via `flushBatch`.
+
+4. **`MarkStoreCompleted` / `GetCompletedStores` callers.** ✅ Confirmed scope is contained.
+   - Production: `cmd/eslorchestrator/run.go:425`, `internal/connector/metrics.go:111,116`, `internal/connector/vusion/sync.go:221`.
+   - Tests: `internal/connector/metrics_test.go:130,134-137`.
+   - No other production code references these APIs.
 
 ### Drop-site Ack policy (decision locked)
 
@@ -537,13 +645,25 @@ E2E (godog) is **not** run after code changes — manual via `make test-e2e` onl
 
 ---
 
-## Pause notes (historical, 2026-04-27)
+## Pause notes
 
-Original plan reviewed by user; no code changes started. Resume by:
-1. Creating new branch off `main`
-2. Running pre-coding verifications listed under PR 1
-3. Greping for all `MarkStoreCompleted` / `GetCompletedStores` callers
-4. Greping for record-drop sites in `internal/sink/postgres/cdc/`, `internal/pipeline/`, `internal/connector/`
+### 2026-04-28 — pre-coding verifications complete, no code yet
+
+Plan revised; all four pre-coding verifications run (see "Pre-coding verifications" cross-cutting section). Two new drop sites in `pipeline.processRecord` (transform-error and preprocess-error paths) folded into §2.4. `MarkStoreCompleted` / `GetCompletedStores` confirmed scoped to `run.go` + `sync.go` + metrics + tests. Branch and code changes not started.
+
+**Resume by:**
+1. Create new branch off `main` (current `feature/schema-qualified-queries` is unrelated).
+2. Begin PR 1 — sink correctness foundation. Implementation order:
+   1. §1.1 — interface contract doc.
+   2. §1.2 — stdout sink Ack contract (single-record sink, easiest).
+   3. §1.3 + §1.5 — `recordOutcome` type + `sendAndProcessBatch` returns ordered outcomes.
+   4. §1.4 non-CDC fallback (per-record retry past first failure).
+   5. §1.4 CDC uniform-outcome semantics with `rolledBackErr`.
+   6. Tests in §Tests block.
+
+### 2026-04-27 — original plan reviewed (historical)
+
+Original plan reviewed by user; no code changes started. Plan was revised on 2026-04-28 after a deeper review surfaced four findings the original draft underweighted (see end of this file).
 
 This plan was revised on 2026-04-28 after a deeper review surfaced four findings that the original draft underweighted:
 - pgx batch error cascade (records_with_errors false positives)
