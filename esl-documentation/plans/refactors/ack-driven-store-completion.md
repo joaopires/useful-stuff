@@ -101,9 +101,22 @@ type Sink interface {
 }
 ```
 
-Remove the `Ack func(error)` field from [`internal/models/record.go`](internal/models/record.go). All outcome reporting flows through the sink-installed handler from this point forward. Records become pure data again.
+**`Record.Ack` stays in PR 1** to keep PR 1 standalone-deployable. PR 1 adds the new `OutcomeHandler` mechanism alongside the existing `Record.Ack` field (dual-track for one PR cycle). PR 2 §2.2 migrates the only `Record.Ack` caller (Phase 1 store WG at [`sync.go:125`](internal/connector/vusion/sync.go#L125)) and removes the field entirely.
 
-`PostgresSink` and `StdoutSink` add an `outcomeHandler OutcomeHandler` field and a `SetOutcomeHandler` method that simply assigns it. Calling `Write` before `SetOutcomeHandler` is undefined; the builder wires it before the pipeline starts (see §2.2).
+This means `flushBatch` reports outcomes through BOTH mechanisms during PR 1:
+
+```go
+for _, outcome := range outcomes {
+    if outcome.record.Ack != nil {
+        outcome.record.Ack(outcome.err)  // legacy — removed in PR 2
+    }
+    s.report(outcome.record, outcome.err)
+}
+```
+
+Mildly ugly for one PR cycle; very safe rollback. PR 2 deletes the legacy block.
+
+`PostgresSink` and `StdoutSink` add an `outcomeHandler OutcomeHandler` field and a `SetOutcomeHandler` method that simply assigns it. Calling `Write` before `SetOutcomeHandler` is permitted (handler is nil-tolerant via the `report` helper) but produces no outcome. The pipeline builder wires the handler before the pipeline starts (see §2.2).
 
 For sites in `PostgresSink` that need to call the handler when it might be nil (e.g. tests that don't install one), define a small helper:
 
@@ -146,13 +159,26 @@ type recordOutcome struct {
 
 The two code paths produce outcomes differently because their persistence guarantees differ.
 
-**Non-CDC path** (`executeBatch`): each `br.Exec() == nil` means the record persisted (its INSERT was implicitly committed). Outcomes are per-record:
+**Non-CDC path** (`executeBatch`): pgx batches run in a single implicit transaction — `pool.SendBatch` pipelines all queries between an extended-protocol Parse/Bind/Execute sequence and a final Sync. Any failure aborts that transaction; PostgreSQL rolls back even the queries whose `br.Exec` reported success before the trigger. **Empirically verified 2026-04-28** via integration test `TestPostgresSink_Integration_BatchPartialFailure_PerRecordOutcome`: in a 3-record batch (good-1, bad-1, good-2), with the original "records before firstFailIdx persisted" model, the table afterwards contained only good-2 (re-executed via fallback). good-1 — whose `br.Exec` returned nil — was rolled back.
 
-- Records `0..firstFailIdx-1` → `{err: nil}` (genuinely persisted before pgx cached the error).
-- Record `firstFailIdx` → `{err: realPGError}` (the trigger).
-- Records `firstFailIdx+1..end` → re-execute one at a time via `pool.Exec` + `prepareQuery` (still inside `withRetry`). Each gets its own true outcome.
+So per-record outcomes after a batch failure are:
 
-This recovery path is the fix for the pgx batch cascade. It runs only after a batch failure, only for records past the first failure.
+- All records — true outcome unknown until re-executed. The `br.Exec` results are not trustworthy when `batchErr != nil`.
+
+The recovery path: after a batch failure, **re-execute every record individually** via `pool.Exec` + `prepareQuery` (still inside `withRetry`). Each runs in its own implicit tx and gets its true outcome. Records with valid data succeed; the genuine violator(s) fail with their real PG error.
+
+```go
+if batchErr == nil {
+    return outcomes, nil
+}
+// Batch rolled back — re-execute every record one at a time.
+for i := range records {
+    outcomes[i].err = s.executeSingle(ctx, records[i])
+}
+return outcomes, batchErr
+```
+
+The fallback's overhead is bounded: only triggers after a batch failure, and only for the failed batch (each retry of a transient error gets one new fallback round). The happy path stays fully pipelined.
 
 **CDC path** (`executeBatchWithCDC`): the entire batch runs inside `s.pool.Begin(ctx)`. Persistence is determined by `tx.Commit()` succeeding — `br.Exec() == nil` is necessary but not sufficient. If anything fails (`DetectChanges`, any upsert via `failFast=true`, `WriteOutbox`, or the commit itself), the deferred rollback invalidates everything.
 
@@ -177,51 +203,60 @@ Today it returns `[]recordFailure` with no positional info. Change it to return 
 - The new behavior renames `lastFailures` → `outcomes` to avoid confusion in code review.
 - Synthesize `rolledBackErr` with `fmt.Errorf("rolled back due to peer record failure: %w", rootCause)` so the cause is preserved for `errors.Is`/`errors.As`.
 - `OutcomeHandler` is **never invoked** from inside `executeBatch` / `executeBatchWithCDC`. Only `flushBatch` reports outcomes — single reporting site per batch makes ordering and `recover()` semantics easy to reason about.
-- `Record.Ack` field removal is part of this PR. Pre-merge grep `internal/` and `cmd/` for `.Ack` to make sure no caller is left dangling. The only known caller today is the connector at [`sync.go:125`](internal/connector/vusion/sync.go#L125) (Phase 1 store WG), which is migrated in PR 2 §2.2.
+- `Record.Ack` is NOT removed in PR 1 (PR 2 territory). `flushBatch` calls both mechanisms during this PR. See §1.1 dual-track snippet.
 
 ### Tests
 
 Integration (testcontainers, follow [`error_handling_integration_test.go`](internal/sink/postgres/error_handling_integration_test.go) patterns):
 
+All tests install a recording outcome handler before any Write. A test helper
+`recorderHandler() (OutcomeHandler, *[]outcome)` returns a handler plus a
+slice the test inspects after `sink.Close()`.
+
 **Non-CDC:**
 
-- **`TestSink_PartialBatch_PerRecordAck`** — batch of 5, 2 violate constraints. Assert: 3 succeed → `Ack(nil)`, 2 fail → `Ack(<their err>)`. 3 rows in destination, 2 rows in `records_with_errors`.
+- **`TestSink_PartialBatch_PerRecordOutcome`** — batch of 5, 2 violate constraints. Assert: 3 outcomes nil, 2 outcomes carry their respective PG errors. 3 rows in destination, 2 rows in `records_with_errors`.
 
-- **`TestSink_BatchCascade_RecoversSurvivors`** — exact reproduction of run 107 cascade. Order: rec 0 OK, rec 1 violates unique constraint, recs 2-4 valid but in same batch. Assert: 4 rows in destination (recs 0, 2, 3, 4 via fallback), 1 row in `records_with_errors`. 4 records `Ack(nil)`, 1 `Ack(<unique violation>)`.
+- **`TestSink_BatchCascade_RecoversSurvivors`** — exact reproduction of run 107 cascade. Order: rec 0 OK, rec 1 violates unique constraint, recs 2-4 valid but in same batch. The pgx batch implicitly rolls back rec 0 too; the fallback re-executes every record individually. Assert: 4 rows in destination (recs 0, 2, 3, 4 — all via fallback), 1 row in `records_with_errors`. 4 outcomes nil, 1 outcome with unique-violation error.
 
-- **`TestSink_TransientError_RetriesViaWithRetry`** — flaky DB returns transient error then success. Assert `withRetry` recovers the whole batch; all records `Ack(nil)`.
+- **`TestSink_TransientError_RetriesViaWithRetry`** — flaky DB returns transient error then success. Assert `withRetry` recovers the whole batch; all 5 outcomes nil.
 
 **CDC:**
 
-- **`TestCDC_HappyPath_AllAckedNil`** — regression. All records `Ack(nil)`, all in destination, matching events in `event_outbox`.
+- **`TestCDC_HappyPath_AllOutcomesNil`** — regression. All outcomes nil, all rows in destination, matching events in `event_outbox`.
 
-- **`TestCDC_BatchFailure_AllRecordsAckedWithRollback`** — one record violates a unique constraint. Assert: all records `Ack(<err wrapping rolledBack>)`, no rows in destination, no events in `event_outbox`. Use `errors.Is` to check the root cause is preserved.
+- **`TestCDC_BatchFailure_AllRecordsRolledBack`** — one record violates a unique constraint. Assert: all outcomes carry an error that wraps the unique-violation, no rows in destination, no events in `event_outbox`. Use `errors.Is` / `errors.As` to recover the root cause.
 
-- **`TestCDC_DetectChangesFails_AllRecordsAcked`** — force `DetectChanges` to error. Same all-or-nothing assertion.
+- **`TestCDC_DetectChangesFails_AllRolledBack`** — force `DetectChanges` to error. Same all-or-nothing assertion.
 
-- **`TestCDC_OutboxWriteFails_AllRecordsAcked`** — force `WriteOutbox` to fail after successful upserts. Assert: tx rolled back, no destination rows, no outbox rows, all records `Ack(err)`.
+- **`TestCDC_OutboxWriteFails_AllRolledBack`** — force `WriteOutbox` to fail after successful upserts. Assert: tx rolled back, no destination rows, no outbox rows, all outcomes carry the wrapped error.
 
 **Cross-sink:**
 
-- **`TestSink_StdoutSink_AcksEveryRecord`** — happy path + write error path. Assert Ack called exactly once per record.
+- **`TestStdoutSink_ReportsEveryRecord`** — every successful Write produces a single nil outcome. (Stdout has no failure path today; add a placeholder error case if write logic ever grows one.)
+
+- **`TestSink_OutcomeHandlerRequired`** — calling Write before SetOutcomeHandler is permitted (handler is nil-tolerant per §1.1's `report` helper) but no outcome is reported. Documented behavior.
 
 Unit:
 
 - **`TestRecordOutcome_OrderingPreserved`** — outcomes returned by `sendAndProcessBatch` align with input order.
 
+- **`TestSink_HandlerCalledExactlyOnce`** — happy path + failure path: each record produces exactly one outcome (no double-reporting from fallback path).
+
 ### Risks (PR 1)
 
 | Risk | Mitigation |
 | --- | --- |
-| Phase 1 store records (which already use Ack) get different signals | Phase 1 was already Ack'd with the joined error — now per-record. Add `TestPhase1StoreAck_StillFires` for happy path |
-| CDC outbox/destination drift if outcomes lie | Tests assert both `event_outbox` and the destination table together, never one in isolation. This is the canary for any subtle break in CDC outcome semantics |
+| Removing `Record.Ack` breaks Phase 1 store WG | **PR 1 keeps `Record.Ack` intact** as a dual-track mechanism (see §1.1). PR 2 §2.2 migrates the connector and removes the field. PR 1 lands standalone with no behavioural change |
+| CDC outbox/destination drift if outcomes lie | Tests assert both `event_outbox` and the destination table together, never one in isolation. Canary for any subtle break in CDC outcome semantics |
 | Per-record fallback path adds latency on errors | Bounded: only triggers after a batch failure, only for records past the first failure. Measure in tests; document expected overhead in the PR description |
 | `withRetry` interaction with single-record fallback | Fallback runs *inside* the `withRetry` invocation. Transient errors retry the whole flow. Test: `TestSink_TransientError_RetriesViaWithRetry` |
 | Synthetic `rolledBackErr` lacks PG error code, breaks downstream classification | Wrap the root cause via `%w`; `errors.As(err, &*pgconn.PgError)` still recovers it. `buildFailedMeta` already uses this pattern |
+| Sink constructed before handler installed; tests/callers forget to install | `report()` helper is nil-tolerant: missing handler is silent (no panic). Builder always installs in production. Tests get explicit `recorderHandler()` |
 
 ### Rollback
 
-Single revert. No schema changes. Old `flushBatch` behavior (Ack with joined err) is restored. No data loss because PR 2 hasn't shipped yet — `store_sync_state` is still driven by `MarkStoreCompleted`.
+Single revert. No schema changes. The old `Record.Ack`-based behaviour returns. No data loss because PR 2 hasn't shipped yet — `store_sync_state` is still driven by `MarkStoreCompleted`.
 
 ---
 
@@ -551,6 +586,33 @@ Schema migration is additive. Rolling back code without rolling back schema: wri
 
 ## Cross-cutting
 
+### Documentation updates
+
+The Sink interface change in PR 1 and the per-store / counter / lifecycle changes in PRs 2 and 3 are user-visible enough to warrant phase-2 documentation review. CLAUDE.md mandates updating `docs/` (here, `esl-documentation/phase-2/`) when public APIs, configuration, or architecture change.
+
+Per-PR documentation review checklist (to run before opening each PR):
+
+**PR 1:**
+- [`phase-2/04-datapipeline.md`](../../phase-2/04-datapipeline.md) — sink section: document the `OutcomeHandler` contract, where it's installed (pipeline builder), and the per-record outcome semantics (non-CDC fallback re-executes all records; CDC uniform outcomes). Note the dual-track with `Record.Ack` is a transition state PR 2 removes.
+- [`phase-2/02-architecture.md`](../../phase-2/02-architecture.md) — if there's a sink/outcome diagram, update to reflect the handler-based reporting.
+
+**PR 2:**
+- [`phase-2/04-datapipeline.md`](../../phase-2/04-datapipeline.md) — store completion section: replace the "MarkStoreCompleted on enqueue" description with "outcome-driven completion via persisted-counter polling." Document the new metrics (`storePending`, `storePersisted`, `storePersistenceFailed`, `storePersistenceFailedCount`, `storeStreamingDone`).
+- [`phase-2/04-datapipeline.md`](../../phase-2/04-datapipeline.md) — counter semantics: `*_processed` columns now mean "persisted" (not "emitted"). Call this out as a behavioural change with consumer impact.
+- [`phase-2/03-database.md`](../../phase-2/03-database.md) — `store_sync_state.sync_status` semantics: document that `failed` now reflects sink-side persistence failures, not just connector errors. Add the new `cancelled` ("another store failed") rationale.
+- [`phase-2/07-operations.md`](../../phase-2/07-operations.md) — operational note: PR 2 alone does not backfill run 107's lost data; document the manual recovery SQL (the lookback widening or targeted re-run) as a one-time operational step.
+- Removal of `Record.Ack` documented in PR 2 description even if no doc edit is needed.
+
+**PR 3:**
+- [`phase-2/03-database.md`](../../phase-2/03-database.md) — `records_with_errors` schema: document the new `run_id`, `retail_chain_id`, `store_id`, `pipeline_name`, `entity_type` columns and their nullability. Note that `store_id` is the stripped form (matching `products.store_id` etc.).
+- [`phase-2/03-database.md`](../../phase-2/03-database.md) — `sync_state.sync_status` accepts `running`. Document the lifecycle (insert at start, update at end) and the orphan-sweep on startup.
+- [`phase-2/07-operations.md`](../../phase-2/07-operations.md) — orphan-sweep behavior: explain that any `running` row at startup is presumed dead and swept; pipeline-name uniqueness is the safety boundary. Add troubleshooting note.
+- [`phase-2/04-datapipeline.md`](../../phase-2/04-datapipeline.md) — note the run-id plumbing into the sink (setter pattern).
+
+The plan does NOT modify Phase 1 docs — Phase 1 (orchestrator/scheduler) is unaffected by these changes.
+
+If a doc review reveals a doc gap that's broader than what this PR introduces, log it as a separate doc PR rather than expanding scope.
+
 ### Pre-coding verifications (completed 2026-04-28)
 
 1. **Pipeline transform preserves Ack pointer.** ✅ Verified.
@@ -647,19 +709,89 @@ E2E (godog) is **not** run after code changes — manual via `make test-e2e` onl
 
 ## Pause notes
 
-### 2026-04-28 — pre-coding verifications complete, no code yet
+### 2026-04-28 — PR 3 datapipeline code shipped, Flyway migration outstanding
 
-Plan revised; all four pre-coding verifications run (see "Pre-coding verifications" cross-cutting section). Two new drop sites in `pipeline.processRecord` (transform-error and preprocess-error paths) folded into §2.4. `MarkStoreCompleted` / `GetCompletedStores` confirmed scoped to `run.go` + `sync.go` + metrics + tests. Branch and code changes not started.
+Datapipeline code merged as commit `5f4172c` (PR #34 on `sonaemc-instore/lac1041-instoreorchestrator_esl-datapipeline`). PR 1 (#32, `505e8da`) and PR 2 (#33, `1b0ca8d`) already on `main`.
 
-**Resume by:**
-1. Create new branch off `main` (current `feature/schema-qualified-queries` is unrelated).
-2. Begin PR 1 — sink correctness foundation. Implementation order:
-   1. §1.1 — interface contract doc.
-   2. §1.2 — stdout sink Ack contract (single-record sink, easiest).
-   3. §1.3 + §1.5 — `recordOutcome` type + `sendAndProcessBatch` returns ordered outcomes.
-   4. §1.4 non-CDC fallback (per-record retry past first failure).
-   5. §1.4 CDC uniform-outcome semantics with `rolledBackErr`.
-   6. Tests in §Tests block.
+**What landed in PR 3 (datapipeline):**
+
+- `state.SyncStatusRunning` constant; `Store.UpdateRun(ctx, *SyncRun)` keyed on `run.ID`; `Store.SweepOrphanedRuns(ctx, pipelineName)` returning rows-affected count.
+- `Sink.SetRunID(int64)` added to the interface; postgres builder gained `WithPipelineName(name)`; stdout `SetRunID` is a no-op.
+- `failedRecordMeta` carries `retailChainID`/`storeID`/`entityType` from `RawData`+`Metadata`; `storeFailedInsert` writes `run_id`, `retail_chain_id`, `store_id`, `pipeline_name`, `entity_type` (all `NULLIF`-wrapped for backward compat).
+- `cmd/eslorchestrator/run.go` orphan-sweeps on startup, inserts `running` row → propagates `runID` into the sink → `finalizeRun` UPDATEs the row at success/failure (signal-driven shutdown also finalizes).
+- Phase-2 docs updated (separate repo, commit `9173ed8`): `03-database.md` (V1.0.0.22 entry, correlation columns + lifecycle sections), `04-datapipeline.md` (`SetRunID` interface change + correlation subsection with triage queries), `07-operations.md` (run lifecycle monitoring queries, orphan-sweep runbook entry, failed-records-by-run triage).
+
+**Outstanding step — Flyway migration V1.0.0.22.** Lives in the schema repo at `~/Projects/sonae/esl/database/sql/`. Until it lands and is applied, the new INSERT in `storeFailedInsert` fails at runtime against any environment running the post-PR-3 code. Plan calls for a single migration with two changes:
+
+```sql
+-- esl-database/sql/V1.0.0.22__records_with_errors_correlation.sql
+ALTER TABLE esl.records_with_errors
+    ADD COLUMN run_id          BIGINT,
+    ADD COLUMN retail_chain_id VARCHAR(255),
+    ADD COLUMN store_id        VARCHAR(255),
+    ADD COLUMN pipeline_name   VARCHAR(255),
+    ADD COLUMN entity_type     VARCHAR(32);
+
+CREATE INDEX idx_records_with_errors_run_id
+    ON esl.records_with_errors (run_id);
+CREATE INDEX idx_records_with_errors_store
+    ON esl.records_with_errors (run_id, retail_chain_id, store_id);
+
+-- Extend sync_state.sync_status CHECK to accept 'running'.
+-- Verify the existing constraint name in V1.0.0.12 first; the constraint
+-- must be DROPped and re-ADDed because PostgreSQL doesn't support ALTER
+-- CHECK in place.
+ALTER TABLE esl.sync_state
+    DROP CONSTRAINT IF EXISTS sync_state_sync_status_check;
+ALTER TABLE esl.sync_state
+    ADD CONSTRAINT sync_state_sync_status_check
+    CHECK (sync_status IN ('running','success','failed','cancelled'));
+```
+
+Notes for the migration session:
+
+- All ADD COLUMN lines are metadata-only in PG (fast). Verify `records_with_errors` table size in pp before applying just to be safe.
+- Pre-existing rows survive with NULL in the new columns — the column-list in the INSERT is explicit so adding columns doesn't break.
+- Constraint rename: confirm the live name in `V1.0.0.12__create_sync_state.sql` before drafting; `sync_state_sync_status_check` is the conventional default but the original migration may have used a custom name.
+- Deploy ordering: migration must apply BEFORE the post-PR-3 datapipeline image ships. Otherwise `storeFailedInsert` errors at first failure write (and the surrounding `s.logger.Error` swallows it — silent broken observability rather than crash, but still wrong).
+
+**Resume migration step by:**
+
+1. `cd ~/Projects/sonae/esl/database` and start a fresh session there.
+2. Branch off `main`; conventional Flyway naming `V1.0.0.22__records_with_errors_correlation.sql`.
+3. Verify the existing `sync_state` CHECK constraint name in V1.0.0.12 before drafting the DROP/ADD.
+4. Apply locally via the repo's docker-compose to smoke-test (Flyway will refuse if the constraint name guess is wrong).
+5. Open PR; once merged, coordinate with platform team on dev/pp/prd apply order.
+
+### 2026-04-28 — PR 1 shipped (merged to `main`)
+
+PR 1 (sink correctness foundation) merged as commit `505e8da` (PR #32 on `sonaemc-instore/lac1041-instoreorchestrator_esl-datapipeline`).
+
+**What landed:**
+- `Sink.SetOutcomeHandler` interface contract + nil-tolerant `report` helper.
+- `recordOutcome` aligned with input batch; `flushBatch` dual-tracks `Record.Ack` (legacy) and `OutcomeHandler` (new).
+- Non-CDC `executeBatch`: per-record fallback re-executes ALL records via `pool.Exec` after a batch failure (corrected pgx-batch-transactional model). Plan §1.4 was wrong about "records before firstFailIdx persisted" — empirical test proved the fix.
+- CDC `executeBatchWithCDC`: uniform `rolledBackErr` outcomes wrapping the root cause via `%w`.
+- `records_with_errors` no longer false-positives from the pgx cascade.
+- Phase-2 docs updated: `04-datapipeline.md` Error Handling rewrite, `02-architecture.md` "Per-record outcome reporting" subsection.
+
+**Status (2026-04-28):** PR 2 (outcome-driven store completion — the actual false-success bug fix) and PR 3 (records_with_errors correlation + running lifecycle) still pending. Resume in fresh sessions.
+
+**Resume PR 2 by:**
+1. Create new branch off `main`.
+2. Read §2.1-§2.8 in this plan file — all decisions locked.
+3. Implementation order:
+   1. §2.1 metrics: `storePending`, `storePersisted`, `storePersistenceFailed`, `storePersistenceFailedCount`, `storeStreamingDone` on `SyncMetrics`.
+   2. §2.2 wiring: pipeline builder installs the handler on the sink with a closure that calls `metrics.RecordPersisted(record, err)`. Phase 1 store WG migrates from `Record.Ack` closure to metrics-polled completion. `MarkStoreCompleted` → `MarkStoreStreamingDone`.
+   3. §2.3 boundary-rejection Ack in `Write()`.
+   4. §2.4 drop-site Acks (including the two `pipeline.processRecord` failure paths surfaced in pre-coding verifications).
+   5. §2.5 shutdown drain.
+   6. §2.6 new resolver in `run.go`.
+   7. §2.7 counter redefinition (`*_processed` reflects persisted, not emitted).
+   8. §2.8 invariant log on Close.
+   9. Tests per §2 Tests block.
+4. Remove `Record.Ack` field from [`internal/models/record.go`](internal/models/record.go) and the dual-track block in `flushBatch`.
+5. Doc updates: `04-datapipeline.md` (store completion + counter semantics), `03-database.md` (sync_status semantics), `07-operations.md` (run-107 backfill recipe).
 
 ### 2026-04-27 — original plan reviewed (historical)
 
