@@ -239,11 +239,13 @@ There is **no foreign key** from `records_with_errors.run_id` to `sync_state.id`
 
 ## `sync_state` lifecycle
 
-Phase 2 PR 3 introduces a running → terminal lifecycle on `esl.sync_state`. The status enum is extended:
+Phase 2 PR 3 introduces a running → terminal lifecycle on `esl.sync_state`. The status enum now covers four values:
 
-```sql
-CHECK (sync_status IN ('running','success','failed','cancelled'))
 ```
+running | success | failed | cancelled
+```
+
+`sync_state.sync_status` is declared as `VARCHAR(20)` with no database-level CHECK constraint (V1.0.0.12). The enum is enforced by the orchestrator — it is the only writer of this column, and the lifecycle below describes the only paths that move a row between states. Adding a CHECK constraint would be safe (all four current values are ≤ 9 chars) but is intentionally deferred so the column does not need a constraint-rotating migration when a future status is introduced.
 
 | Status | When the row is in this state |
 |---|---|
