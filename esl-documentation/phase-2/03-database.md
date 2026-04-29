@@ -129,10 +129,10 @@ Only delivered events are eligible for cleanup. Events with status `PENDING` or 
 
 | Version | Description |
 |---|---|
-| V1.0.0.15 | Create `event_outbox` table |
-| V1.0.0.16 | Create partial indexes on `event_outbox` |
-| V1.0.0.17 | Create `cleanup_delivered_events` retention function |
-| V1.0.0.18 | Create `event_outbox` UUID primary key and retention function |
+| V1.0.0.15 | Strip composite `{retail_chain_id}.{store_id}` prefixes from existing data; add `retail_chain_id` to `store_sync_state` |
+| V1.0.0.16 | Create `event_outbox` table (UUID primary key, status check constraint) |
+| V1.0.0.17 | Create partial indexes on `event_outbox` (`occurred_at` for `PENDING`, `delivered_at` for `DELIVERED`) |
+| V1.0.0.18 | Create `cleanup_delivered_events` retention function |
 | V1.0.0.19 | Add `deletion_date` to labels; add `deleted_at` to products and labels |
 | V1.0.0.20 | Increase entity ID columns (`item_id`, `label_id`, `access_points.id`) to VARCHAR(255) |
 | V1.0.0.21 | Reset role-level `statement_timeout` set by V13 (see PgBouncer compatibility below) |
@@ -193,6 +193,16 @@ Full indexes on `occurred_at` or `delivered_at` would include all rows. Partial 
 
 Unlike Phase 1's `sync_state` tables which use `AFTER INSERT` triggers for retention, the outbox uses an explicitly called function. This avoids adding cleanup overhead to every pipeline transaction — retention runs on its own schedule, independent of the write path.
 
+## Two state tables: `sync_state` vs `store_sync_state`
+
+Two Phase-1 tables track sync state at different grains and both carry a `sync_status` column — a common source of confusion. The sections below describe each in detail.
+
+| | `sync_state` (V1.0.0.12) | `store_sync_state` (V1.0.0.14) |
+|---|---|---|
+| Grain | One row per pipeline run | One row per `(pipeline_name, retail_chain_id, store_id)` sync |
+| Status values | `running` → {`success`, `failed`, `cancelled`} (Phase 2) | `success` / `failed` / `cancelled` |
+| Linked by | `id` is the run identity | `run_id` references `sync_state.id` (no FK — see below) |
+
 ## `store_sync_state` semantics
 
 The Phase 1 `store_sync_state` table is unchanged structurally in Phase 2 but its `sync_status` column is now sourced from sink truth, not connector enqueue:
@@ -251,6 +261,8 @@ running | success | failed | cancelled
 |---|---|
 | `running` | The orchestrator inserted the row at the start of a pipeline run; the run hasn't finished yet |
 | `success` / `failed` / `cancelled` | Terminal outcomes — the orchestrator updated the row at the end of the run |
+
+![sync_state lifecycle](diagrams/sync-state-lifecycle.png)
 
 The orchestrator runs three operations against `sync_state` per run:
 

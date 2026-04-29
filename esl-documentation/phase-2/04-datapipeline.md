@@ -414,7 +414,7 @@ sink:
       enabled: true   # Enable CDC change detection and outbox writes
 ```
 
-No additional CDC-specific settings are needed. The outbox table must exist in the database (see [Database](03-database.md) migrations V1.0.0.15–17).
+No additional CDC-specific settings are needed. The outbox table must exist in the database (see [Database](03-database.md) migrations V1.0.0.16–18).
 
 ## Deletion Detection
 

@@ -4,13 +4,13 @@
 
 Phase 2 adds one new component (event-publisher) and updates one existing component (datapipeline). All are deployed via the existing single Argo CD Application managed by the ESL Orchestrator Helm chart — no new cluster-level resources or separate pipelines.
 
-The rollout is designed so that chart changes can land safely with CDC disabled. The CDC flag is then flipped per environment once the new infrastructure is verified.
+The rollout has two goals: (1) chart changes can land safely with CDC disabled, and (2) entity tables are populated by at least one full sync *before* CDC is enabled, so that the first CDC run does not flood Solace with a CREATED event per active row plus a DELETED event per historical DELETED row VLink returns. The CDC flag is flipped per environment only after both conditions are met.
 
 ## Component Inventory
 
 | Component | Workload | Lifecycle | Phase 1 | Phase 2 |
 |---|---|---|---|---|
-| dbMigrations | Flyway Job (PreSync hook) | One-shot per sync | Existing | New migrations V1.0.0.14–20 (includes V1.0.0.19 deletion columns, V1.0.0.20 entity ID length widening) |
+| dbMigrations | Flyway Job (PreSync hook) | One-shot per sync | Existing | New migrations V1.0.0.14–23 (V1.0.0.15 strip composite `store_id` + add `retail_chain_id`; V1.0.0.16–18 `event_outbox` table, indexes, retention function; V1.0.0.19 deletion columns; V1.0.0.20 entity ID length widening; V1.0.0.21 reset role-level `statement_timeout`; V1.0.0.22 `records_with_errors` correlation columns; V1.0.0.23 drop `UNIQUE` qualifier on access-points indexes) |
 | datapipeline | CronJob | Scheduled (daily default) | Existing | Added CDC logic + `cdc.enabled` flag |
 | datafetch | Deployment + Service + Ingress | Always-on | Existing | Unchanged |
 | **event-publisher** | Deployment | Always-on | — | **New** |

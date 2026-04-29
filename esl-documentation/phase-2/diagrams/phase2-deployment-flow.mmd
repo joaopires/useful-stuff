@@ -2,7 +2,7 @@ flowchart TD
     Start(["Chart changes ready<br/>(helm-lint clean)"]) --> Merge["Merge per-env values<br/>CDC disabled"]
 
     Merge --> SyncDev["ArgoCD sync — dev"]
-    SyncDev --> DevPre["PreSync: Flyway Job<br/>V1.0.0.14–20"]
+    SyncDev --> DevPre["PreSync: Flyway Job<br/>V1.0.0.14–23"]
     DevPre --> DevApp["Apply workloads<br/>(datapipeline, event-publisher,&#8230;)"]
     DevApp --> DevVerify{"dev verification<br/>• outbox reachable<br/>• publisher /ready = 200<br/>• no datapipeline cdc_* logs"}
     DevVerify -- "pass" --> DevFlip["Flip cdc.enabled: true (dev)<br/>manual sync, inspect outbox<br/>and Solace topic traffic"]

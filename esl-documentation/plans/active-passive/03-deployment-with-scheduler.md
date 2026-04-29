@@ -1,5 +1,7 @@
 # Option 3 — Deployment with internal scheduler and lease
 
+> **Outcome (2026-04-29):** Option 3 was **not** chosen. Option 1 (config-driven suspend) was selected for `datapipeline`. `event-publisher` is out of scope for active/passive — it stays active/active via `SELECT … FOR UPDATE SKIP LOCKED` on `event_outbox`. Pros/cons below that hinge on architectural symmetry with event-publisher (shared lease primitive, partitioned leases) are obsolete: event-publisher will not adopt a lease.
+
 **One-liner:** replace the CronJob with a long-running Deployment on each cluster. Pods continuously contend for a single database-backed lease; the active pod's in-process scheduler fires the daily sync; the passive pod takes over within seconds if the active one dies. Full automatic failover including mid-run crashes.
 
 ## How it works

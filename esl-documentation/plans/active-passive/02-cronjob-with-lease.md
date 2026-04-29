@@ -1,5 +1,7 @@
 # Option 2 — CronJob with database-backed lease
 
+> **Outcome (2026-04-29):** Option 2 was **not** chosen. Option 1 (config-driven suspend) was selected for `datapipeline`. `event-publisher` is out of scope for active/passive — it stays active/active via `SELECT … FOR UPDATE SKIP LOCKED` on `event_outbox`. Pros/cons below that frame the lease primitive as "reusable for event-publisher" are obsolete: that reuse is no longer planned.
+
 **One-liner:** both clusters deploy the CronJob and both fire at the same time. A single Postgres row arbitrates who runs: the winner executes the sync, the loser exits cleanly. Automatic takeover for whole-cluster failures.
 
 ## How it works

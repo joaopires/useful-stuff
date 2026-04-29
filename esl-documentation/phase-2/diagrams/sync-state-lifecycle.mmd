@@ -1,0 +1,13 @@
+stateDiagram-v2
+    direction LR
+
+    [*] --> running: Insert at run start
+
+    running --> success: Update at end<br/>all stores succeeded
+    running --> failed: Update at end<br/>any store failed
+    running --> cancelled: Update at end<br/>aborted by another store's failure
+    running --> failed: Sweep on startup<br/>orphaned by orchestrator restart
+
+    success --> [*]
+    failed --> [*]
+    cancelled --> [*]

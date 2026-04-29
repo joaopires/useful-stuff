@@ -71,3 +71,54 @@ erDiagram
         text        status            "PENDING | DELIVERED | FAILED"
         timestamptz delivered_at
     }
+
+    %% Operational tables (run + per-store sync state, error log).
+    %% No FK constraints between these — see 03-database.md for rationale.
+    SYNC_STATE         ||..o{ STORE_SYNC_STATE     : "run_id (logical, no FK)"
+    SYNC_STATE         ||..o{ RECORDS_WITH_ERRORS  : "run_id (logical, no FK)"
+
+    SYNC_STATE {
+        bigint      id                       PK
+        varchar     pipeline_name
+        varchar     sync_status              "running | success | failed | cancelled"
+        bigint      stores_processed
+        bigint      products_processed
+        bigint      labels_processed
+        bigint      access_points_processed
+        interval    duration
+        timestamptz started_at
+        timestamptz finished_at
+        text        error_message
+    }
+
+    STORE_SYNC_STATE {
+        bigint      id                       PK
+        bigint      run_id                       "logical → sync_state.id"
+        varchar     pipeline_name
+        varchar     retail_chain_id              "Phase 2 (V1.0.0.15)"
+        varchar     store_id
+        varchar     sync_status              "success | failed | cancelled"
+        bigint      products_processed
+        bigint      labels_processed
+        bigint      access_points_processed
+        timestamptz synced_at
+        text        error_message
+    }
+
+    RECORDS_WITH_ERRORS {
+        serial      id                       PK
+        bigint      run_id                       "logical → sync_state.id (V1.0.0.22, nullable)"
+        varchar     retail_chain_id              "V1.0.0.22 (nullable)"
+        varchar     store_id                     "V1.0.0.22 (nullable)"
+        varchar     pipeline_name                "V1.0.0.22 (nullable)"
+        varchar     entity_type                  "V1.0.0.22 (nullable)"
+        text        table_name
+        text        record_id
+        text        sync_mode
+        text        error_type
+        text        error_message
+        text        detail
+        text        pg_error_code
+        text        data
+        timestamptz created_at
+    }

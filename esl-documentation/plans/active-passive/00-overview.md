@@ -2,16 +2,17 @@
 
 ## Problem
 
-The production ESL Orchestrator is deployed to two OpenShift clusters (`oshift-prd-mts1` and `oshift-prd-rba1`) in an active/active pattern. Both clusters run an identical workload because they share the same Helm chart and values file. Two of those workloads have a concrete cost when duplicated:
+The production ESL Orchestrator is deployed to two OpenShift clusters (`oshift-prd-mts1` and `oshift-prd-rba1`) in an active/active pattern. Both clusters run an identical workload because they share the same Helm chart and values file. One workload has a concrete cost when duplicated:
 
 1. **`datapipeline` CronJob** — syncs data from the Vusion API into PostgreSQL daily at 19:00 (Europe/Lisbon). The Vusion subscription enforces a **daily quota**. Two clusters firing the same job at the same time consume the quota twice.
-2. **`event-publisher` Deployment** (Phase 2, not yet in production) — polls the transactional outbox and publishes events to Solace continuously. Already safe under active/active thanks to `FOR UPDATE SKIP LOCKED` on the outbox, but it still doubles DB polling load.
+
+The other Phase 2 workload (`event-publisher`) does **not** need active/passive: `SELECT … FOR UPDATE SKIP LOCKED` on `event_outbox` already prevents duplicate publishes, and running it active/active gives a hot standby on the active cluster's outage path. It is intentionally out of scope for this plan.
 
 The REST API (`datafetch`) is correctly active/active — stateless reads benefit from load distribution across both clusters.
 
 ## Target
 
-Move the two stateful writers (`datapipeline` and, when it ships, `event-publisher`) to an **active/passive** pattern: exactly one cluster performs the work; the other is a standby that takes over on failure.
+Move the `datapipeline` CronJob to an **active/passive** pattern: exactly one cluster performs the work; the other is a standby that takes over on failure. `event-publisher` and `datafetch` remain active/active.
 
 ## Shared context all options rely on
 
@@ -42,7 +43,7 @@ Each option is described in its own report in this directory. They differ along 
 | Helm chart changes | 1 line (`suspend: …`) + `helmParameters` in foundations | New config block for lease | CronJob → Deployment migration |
 | Continuous observability (24/7) | No (pods only run during scheduled window) | No (same) | Yes (pods always up, probeable) |
 | Deviation from current architecture | None | None | Moderate (new pod shape) |
-| Reusability for event-publisher | Not applicable (event-publisher is already a Deployment) | Yes, same lease primitive | Yes, same primitive + same pod shape |
+| Reusability for event-publisher | N/A — event-publisher stays active/active (SKIP LOCKED) | N/A — same | N/A — same |
 | Rollback safety | Change one value in git | Feature flag `leader_lease.enabled: false` | Revert Helm manifest to CronJob |
 | Risk of regression in current prd behavior | Very low | Low | Medium |
 | Time to implement (engineering days) | ~1–2 | ~5–7 | ~15–20 |
@@ -65,7 +66,7 @@ flowchart TD
 
 ## Scope note
 
-All three options apply to the `datapipeline` CronJob. For `event-publisher` (Phase 2), the natural fit is option 3's lease primitive since it is already a long-running Deployment — the lease can be added without any shape change. Whichever option is chosen for `datapipeline`, the same lease library (if introduced) can be reused by `event-publisher` at rollout time.
+All three options apply to the `datapipeline` CronJob. `event-publisher` is intentionally **out of scope** for active/passive: it is safe under active/active via `SELECT … FOR UPDATE SKIP LOCKED` on `event_outbox`, and the duplicated DB polling load is accepted in exchange for the hot-standby benefit on the active cluster's outage path. The throughput / scaling work for `event-publisher` is tracked separately under `plans/drafts/event-publisher-parallel-publishing.md`.
 
 ## Scaling context — the 300-store production flip
 
@@ -96,7 +97,7 @@ If a single parallelised pod still saturates under the flip, the next step is **
 
 - In-pod parallelism on `event-publisher` is a **prerequisite for the 300-store rollout**, regardless of which of the three datapipeline options is picked.
 - It's a **separate workstream** from the active/passive question (no bearing on the Vusion quota concern).
-- The lease library, if built for datapipeline, should be **designed with a partition-slot parameter from day one** so extending it later for horizontal publisher scaling is additive.
+- If a lease library is ever built for `datapipeline`, the partition-slot extension noted above remains an option for partitioned publishers, but it is not currently planned — `event-publisher` stays active/active.
 
 ### Pre-flip sizing checks (must be confirmed with ops before rollout)
 

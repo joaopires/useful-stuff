@@ -28,7 +28,7 @@ Expected distributions:
 | Growing `PENDING` | Publisher not running, crashed, or unable to reach Solace |
 | Growing `FAILED` | Transform or publish errors — see runbook |
 
-> **Expect a DELETED spike on the initial full sync.** The first datapipeline run against a store with no prior sync state emits a DELETED event for every historical DELETED row returned by VLink (products and labels only — see [04-datapipeline.md](04-datapipeline.md)). For a reference store (`bomdia_pt.009648`), this produces roughly **6,025 product + 631 label DELETED rows** in a single run — around 6,600 DELETED outbox entries appear at once. This is normal behaviour, not a backlog. Subsequent incremental runs only emit DELETED events on actual status transitions.
+> **No initial CREATED/DELETED spike is expected after a CDC enable.** The rollout sequence (see [06-deployment.md](06-deployment.md)) populates each environment's database with `cdc.enabled: false`: VLink skips DELETED-row fetches and the sink writes no outbox events during the initial full sync. By the time CDC is flipped on, the entity tables already mirror Vusion's current state — subsequent pre-fetch + diff cycles produce events only on real ongoing changes. If CDC were instead enabled against an empty DB, the first run would emit a CREATED event per active row plus a DELETED event per historical DELETED row VLink returns (≈6,600 outbox entries for a single reference store like `bomdia_pt.009648`: roughly 6,025 product + 631 label DELETED rows). Operators monitoring `event_outbox` post-enable should see volumes proportional to actual change rates, not initial-population magnitudes.
 
 Useful supplementary queries:
 
@@ -82,15 +82,13 @@ SELECT pipeline_name, id, started_at, finished_at
 
 ### Publisher metrics (OpenTelemetry)
 
-The event-publisher exports OTel metrics via the shared collector:
+The event-publisher exports the following OTel metrics via the shared collector:
 
-| Metric | Type | Attributes | Investigate when |
-|---|---|---|---|
-| `event_publisher.events_processed_total` | Counter | `entity_type`, `event_type`, `status` | `status=failed` rate > 0 |
-| `event_publisher.poll_batch_size` | Histogram | — | Values consistently at `batch_size` (100) → publisher lagging |
-| `event_publisher.poll_cycles_total` | Counter | — | Stops incrementing → publisher deadlocked or crashed |
-| `solace.producer.publish_retries` | Counter | — | Rate > 0 → broker latency or connection instability |
-| `solace.core.connection_drops` | Counter | — | Any non-zero count → broker-side or network issue |
+- `event_publisher.events_processed_total` — Counter, attributes `entity_type`, `event_type`, `status`. Investigate when the `status=failed` rate > 0.
+- `event_publisher.poll_batch_size` — Histogram. Investigate when values are consistently at `batch_size` (100) — indicates the publisher is lagging.
+- `event_publisher.poll_cycles_total` — Counter. Investigate when it stops incrementing — the publisher is deadlocked or has crashed.
+- `solace.producer.publish_retries` — Counter. Investigate when the rate > 0 — broker latency or connection instability.
+- `solace.core.connection_drops` — Counter. Investigate when any non-zero count appears — broker-side or network issue.
 
 ### Log filtering (Zap)
 
@@ -406,9 +404,11 @@ If `shutdownTimeout` (default `30s`) is exceeded, Kubernetes sends SIGKILL. Cons
 
 ## Active/Passive Failover
 
-The ESL Orchestrator is deployed to two OpenShift clusters per environment in an active/passive pattern for the datapipeline CronJob. One cluster is designated active — that's where scheduled runs fire. The other renders the same chart but with `spec.suspend: true`, so the CronJob exists but never fires. The `datafetch` REST API stays active/active across both clusters; only datapipeline is gated. Event-publisher will follow the same mechanism (`replicas: 0` on the passive cluster) once its k8s manifests land.
+> **Note: this is a temporary mechanism.** The active/passive setup and the manual failover procedure described below are interim measures adopted to enable multi-cluster operation within Phase 2 timelines. Future phases of the project will replace this with a more robust approach to multi-cluster scheduling — likely a DB-backed lease for automatic leader election — removing the need for coordinated `activeCluster` values flips. The values-flip mechanism documented here is not the long-term design.
 
-This is a manual failover mechanism. Automatic failover based on a DB-backed lease is planned for a future release.
+The ESL Orchestrator is deployed to two OpenShift clusters per environment in an active/passive pattern for the datapipeline CronJob. One cluster is designated active — that's where scheduled runs fire. The other renders the same chart but with `spec.suspend: true`, so the CronJob exists but never fires. The `datafetch` REST API and the `event-publisher` Deployment both stay active/active across both clusters; only the datapipeline CronJob is gated. The two event-publisher pods coordinate on the shared `event_outbox` via `SELECT … FOR UPDATE SKIP LOCKED`, so each row is processed by exactly one pod regardless of which cluster picks it up first.
+
+![Active/Passive cluster topology](diagrams/active-passive-topology.png)
 
 ### Mechanism
 

@@ -1,5 +1,7 @@
 # Option 1 — Config-driven active/passive via `suspend`
 
+> **Outcome (2026-04-29):** Option 1 was selected and shipped for `datapipeline`. `event-publisher` is **out of scope** for active/passive — it stays active/active via `SELECT … FOR UPDATE SKIP LOCKED` on `event_outbox`. Any pros/cons below that hinge on extending this mechanism to event-publisher are obsolete; see `config-driven.md` for the live implementation plan.
+
 **One-liner:** both clusters deploy the CronJob, but the template renders `spec.suspend: true` on whichever cluster is not the currently-designated active one. Failover is a single-value edit.
 
 ## How it works
@@ -128,7 +130,6 @@ No Go code changes. No database migrations. No new libraries.
 ## When NOT to pick this
 
 - If the business needs unattended failover (e.g., weekend outages where no one is paged).
-- If the plan is to apply the same mechanism to `event-publisher` later — it won't generalize cleanly.
 
 ## Note on event-publisher scaling (orthogonal to this option)
 

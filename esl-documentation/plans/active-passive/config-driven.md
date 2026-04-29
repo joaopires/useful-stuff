@@ -5,40 +5,37 @@
 The ESL Orchestrator is deployed to two production OpenShift clusters (`oshift-prd-mts1` primary and `oshift-prd-rba1` redundant) in an active/active pattern. Both clusters run the same workloads:
 
 - **`datapipeline`** CronJob — fires at the same scheduled time on both clusters, doubling Vusion API quota consumption on every run. **Active today, quota-doubling in production.**
-- **`event-publisher`** Deployment (Phase 2, not yet in production) — polls the same `event_outbox` table and publishes to Solace. `FOR UPDATE SKIP LOCKED` prevents duplicate publishes but both pods compete for work, doubling DB polling and Solace sessions. The backlog-recovery ordering edge case also disappears if only one pod is active.
+- **`event-publisher`** Deployment (Phase 2) — polls the same `event_outbox` table and publishes to Solace. `FOR UPDATE SKIP LOCKED` makes it safe under active/active; the two pods coordinate on the shared outbox via row locks, so each row is processed by exactly one pod. Stays active/active and is **out of scope** for the active/passive scheme.
 - **`datafetch`** REST API — stateless; stays active/active for load distribution. Out of scope.
 
-**Decision (2026-04-17, updated 2026-04-22):** proceed with Option 1 from the comparison reports at `esl-documentation/plans/active-passive/` — render-time suspension driven by a shared `activeCluster` value and the `clusterName` injected via ArgoCD `helmParameters`. Manual failover via a one-line edit to the ESL values file. Roll out in two phases: **Phase A** applies active/passive to `datapipeline` only (before Phase 2 / PR #30); **Phase B** extends it to `event-publisher` after PR #30 merges.
+**Decision (2026-04-17, updated 2026-04-29):** proceed with Option 1 from the comparison reports at `esl-documentation/plans/active-passive/` — render-time suspension driven by a shared `activeCluster` value and the `clusterName` injected via ArgoCD `helmParameters`. Manual failover via a one-line edit to the ESL values file. Scope is **`datapipeline` CronJob only**. The previously planned Phase B (extending the same gating to `event-publisher`) was **descoped on 2026-04-29**: event-publisher is safe under active/active via the outbox row locks, so the additional gating buys nothing and the duplicated DB polling is accepted.
 
 Option 3 (Deployment + internal scheduler + DB lease, with automatic failover) is deferred to a future release — see `plans/drafts/active-passive-deployment-scheduler.md`.
 
 ## Goal
-
-### Phase A (this PR — before PR #30)
 
 Ensure `datapipeline` runs **only on the currently-designated active cluster**. This:
 
 - Halves Vusion API quota consumption (from the datapipeline CronJob).
 - Establishes the failover convention (a single `activeCluster` value) that the whole platform will adopt.
 
-### Phase B (follow-up — after PR #30 merges)
+## Current status (2026-04-29)
 
-Extend the same `activeCluster` gating to `event-publisher`. This:
-
-- Halves DB polling and Solace sessions (from the event-publisher Deployment).
-- Eliminates the backlog-recovery ordering risk on event-publisher.
-
-## Current status (2026-04-24)
-
-### Phase A
+### Datapipeline active/passive
 
 - Steps 1–5 done. Chart changes merged via PR #33 (2026-04-22) in `sonaemc-instore/lac1041-instoreorchestrator_esl`. Follow-up PR #41 (branch `feat/datapipeline-suspend-override`, targets `testing`, open as of 2026-04-24) adds a manual `dataPipeline.suspend` override on top of the cluster check — see Step 3e. Dev and PP rollout verified on 2026-04-24, including a successful failover toggle on PP.
 - Step 6 (prd rollout) not yet executed — awaiting ≥ 1 week of PP stability.
 - Step 8 partial: a `dataPipeline.suspend` bullet was added to `phase-2/06-deployment.md` Configuration Reference (2026-04-24). The `phase-2/07-operations.md` "Active/Passive Failover" section and the `esl_datapipeline_no_successful_run_36h` alert are still outstanding.
 
-### Phase B
+### Event-publisher (descoped 2026-04-29)
 
-Blocked on PR #30 merge in the k8s repo. No work started.
+The previously planned Phase B (gating `event-publisher` via the same `activeCluster` mechanism with `replicas: 0` on the passive cluster) is no longer planned. Rationale:
+
+- The two pods are already safe under active/active via `SELECT … FOR UPDATE SKIP LOCKED` on `event_outbox` — each row is processed by exactly one pod regardless of which cluster picks it up first. No correctness concern.
+- The duplicated DB polling (1 query/sec from each pod) is negligible and accepted.
+- Adding the gating would remove the second pod's hot-standby benefit on the active cluster outage path; active/active is genuinely better here.
+
+The throughput / scaling work for event-publisher (in-pod parallel publishing for the 300-store rollout) is tracked separately under `plans/drafts/event-publisher-parallel-publishing.md` and is unaffected by this descope.
 
 ### Open prerequisites
 
@@ -46,18 +43,17 @@ Blocked on PR #30 merge in the k8s repo. No work started.
 
 ### Next up (pickup point)
 
-1. Start Step 8: draft the "Active/Passive Failover" section in `phase-2/07-operations.md` (mechanism overview + failover steps + note on `dataPipeline.suspend`) and add the `esl_datapipeline_no_successful_run_36h` Prometheus alert.
+1. Finish Step 8: draft the `esl_datapipeline_no_successful_run_36h` Prometheus alert. (The `phase-2/07-operations.md` "Active/Passive Failover" section was added on 2026-04-29.)
 2. After ≥ 1 week of PP stability, execute Step 6 — production rollout on `oshift-prd-rba1` / `oshift-prd-mts1`.
 
 ## Scope
 
-- **Phase A (in scope now)**
+- **In scope**
   - `datapipeline` CronJob (`esl/k8s/helm/templates/datapipeline-cronjob.yaml`).
   - New top-level shared `activeCluster` value in the ESL chart values files.
   - ArgoCD foundations changes to pass `clusterName` into the ESL chart via `helmParameters` — **DONE** by DevOps.
-- **Phase B (after PR #30 merges)**
-  - `event-publisher` Deployment (`esl/k8s/helm/templates/eventpublisher-deployment.yaml`) — add conditional `replicas` using the same `activeCluster` mechanism.
 - **Out of scope**
+  - `event-publisher` Deployment — stays active/active via outbox row locks (descoped 2026-04-29; see Current status).
   - `datafetch` REST API — stays active/active.
   - Any DB-backed lease primitive, internal scheduler, or Deployment refactor of datapipeline — that's Option 3.
   - Automatic failover — manual edit of `activeCluster` is the chosen mechanism.
@@ -66,7 +62,6 @@ Blocked on PR #30 merge in the k8s repo. No work started.
 
 1. ~~**Ops confirms `clusterName` values**~~ — **DONE (2026-04-22, prd confirmed 2026-04-24).** Confirmed values: `rba-d1` (dev, single cluster), `oshift-pp-rba1` / `oshift-pp-mts1` (PP), `oshift-prd-rba1` / `oshift-prd-mts1` (prd).
 2. ~~**ArgoCD `helmParameters` set up**~~ — **DONE (2026-04-22).** DevOps confirmed `clusterName` is passed via `helm.parameters` in the ArgoCD Application (verified on PP).
-3. **Phase 2 k8s PR #30 merged** — required only for Phase B (event-publisher). Phase A (datapipeline) proceeds independently.
 
 ## Architecture after implementation
 
@@ -89,11 +84,9 @@ Blocked on PR #30 merge in the k8s repo. No work started.
       suspend: {{ ne .Values.clusterName .Values.activeCluster }}  <-- Phase A
       schedule: {{ $dp.schedule | quote }}
 
-  eventpublisher-deployment.yaml:                              <-- Phase B (after PR #30)
-    spec:
-      replicas: {{ if eq .Values.clusterName .Values.activeCluster }}
-                    {{ $ep.replicaCount | default 1 }}
-                {{ else }}0{{ end }}
+  # eventpublisher-deployment.yaml is intentionally NOT gated by activeCluster.
+  # event-publisher stays active/active; the two pods coordinate on the
+  # shared event_outbox via SELECT ... FOR UPDATE SKIP LOCKED.
 
 Rendered on oshift-pp-rba1 (active):
   CronJob.suspend = false        -> fires at 12:00
@@ -128,7 +121,7 @@ helm:
 
 Each physical Argo instance passes its own cluster identity string.
 
-### ~~Step 3 — ESL chart changes (Phase A — datapipeline only)~~ DONE
+### ~~Step 3 — ESL chart changes (datapipeline only)~~ DONE
 
 Repo: `sonaemc-instore/lac1041-instoreorchestrator_esl` at `k8s/`.
 
@@ -214,35 +207,25 @@ After PP stable for ≥ 1 week with at least one successful manually-triggered f
   - `esl.sync_state`: exactly one row for `esl-orchestrator-prd` with the expected timestamp.
   - Vusion quota usage (ops dashboard) halved relative to prior baseline.
 
-### Step 7 — Phase B: extend to event-publisher (after PR #30 merges) — BLOCKED ON PR #30
+### ~~Step 7 — Extend to event-publisher~~ DESCOPED 2026-04-29
 
-After Phase 2 k8s PR #30 is merged and event-publisher is deployed:
-
-Add conditional `replicas` to `helm/templates/eventpublisher-deployment.yaml`:
-
-```yaml
-spec:
-  replicas: {{ if eq .Values.clusterName .Values.activeCluster }}{{ $ep.replicaCount | default 1 }}{{ else }}0{{ end }}
-```
-
-This preserves the existing `replicaCount` semantics for the active cluster (default 1, overridable) while forcing 0 on the passive cluster. Same `activeCluster` value already in place — no values file changes needed.
+Originally planned as Phase B (conditional `replicas` on `eventpublisher-deployment.yaml` driven by the same `activeCluster` mechanism). Descoped 2026-04-29: event-publisher stays active/active because `SELECT … FOR UPDATE SKIP LOCKED` on `event_outbox` already prevents duplicate publishes, and the active/active hot-standby buys more than the gating would. See Current status above.
 
 ### Step 8 — Documentation + observability — PARTIAL
 
-Done (2026-04-24):
+Done:
 
-- `dataPipeline.suspend` bullet added to `esl-documentation/phase-2/06-deployment.md` Configuration Reference (covers the override added in Step 3e).
-- "Active/Passive Failover" section added to `esl-documentation/phase-2/07-operations.md` — covers mechanism, cluster identities, unhealthy-cluster signals, failover procedure, post-failover verification, rollback, and the manual-pending-auto-failover status note.
+- `dataPipeline.suspend` bullet added to `esl-documentation/phase-2/06-deployment.md` Configuration Reference (2026-04-24, covers the override added in Step 3e).
+- "Active/Passive Failover" section added to `esl-documentation/phase-2/07-operations.md` (2026-04-29, includes topology diagram, mechanism overview, cluster identities, unhealthy-cluster signals, failover procedure, post-failover verification, rollback, and the temporary-mechanism note).
 
 Still outstanding:
 
 - Add Prometheus alert (place in `values-observability.yaml` alongside existing alerts):
   - `esl_datapipeline_no_successful_run_36h` — fires if `esl.sync_state` has no `sync_status = 'SUCCESS'` row for `esl-orchestrator-prd` in the last 36 hours.
-  - After Phase B: `esl_eventpublisher_no_active_pod` — fires if both clusters' event-publisher Deployments show 0 ready replicas for >5 min.
 
 ## Verification checklist
 
-### Phase A (sign off per environment)
+### Sign off per environment
 
 - [ ] `helm template` renders `suspend: false` on active cluster and `suspend: true` on passive cluster.
 - [ ] ArgoCD Application `spec.sources[0].helm.parameters` contains `clusterName` in each cluster.
@@ -253,18 +236,9 @@ Still outstanding:
 - [ ] "Active/Passive Failover" section added to `phase-2/07-operations.md`.
 - [ ] `esl_datapipeline_no_successful_run_36h` alert configured.
 
-### Phase B (after PR #30, sign off per environment)
-
-- [ ] `helm template` renders `replicas: 1` on active and `replicas: 0` on passive.
-- [ ] `kubectl get deployment orchestrator-esl-eventpublisher -o jsonpath='{.spec.replicas}'` returns expected count per cluster.
-- [ ] On the passive cluster, `kubectl get pods | grep eventpublisher` returns no results.
-- [ ] On the active cluster, event-publisher logs show polling activity and delivered-event counts.
-- [ ] `esl_eventpublisher_no_active_pod` alert configured.
-
 ## Rollback
 
-- **Phase A:** revert the PR that added `suspend:` to the CronJob template. Both clusters resume active/active (datapipeline fires on both). No DB or lease state to clean up.
-- **Phase B:** revert just the `replicas:` expression in `eventpublisher-deployment.yaml`. Event-publisher scales back to `replicaCount` on both clusters.
+- Revert the PR that added `suspend:` to the CronJob template. Both clusters resume active/active (datapipeline fires on both). No DB or lease state to clean up.
 
 ## Risks
 
@@ -274,7 +248,6 @@ Still outstanding:
 | Typo in `activeCluster` value → both clusters suspended → no datapipeline runs | Low | `helm lint` + pre-sync render verification catches it. `esl_datapipeline_no_successful_run_36h` alert catches it at runtime. |
 | Ops forgets to flip `activeCluster` during a prd outage | Medium | Runbook + oncall alert. Explicit ownership in oncall playbook. |
 | ~~PP redundant cluster name unknown / unconfirmed~~ | ~~Low~~ | **Resolved** — `oshift-pp-mts1` / `oshift-pp-rba1` confirmed. |
-| Phase B conflicts with PR #30 changes to `eventpublisher-deployment.yaml` | Low | Phase B is a follow-up PR after PR #30 merges — no conflict possible. |
 
 ## Out of scope (explicit)
 
