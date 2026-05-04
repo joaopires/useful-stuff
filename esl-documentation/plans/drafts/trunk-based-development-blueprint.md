@@ -233,37 +233,60 @@ There are **no special branches** for bugs or hotfixes. The process is identical
 
 ## 7. Current State of ESL Projects
 
-| Project | Dockerfile | Tests Enabled | Notes |
-|---------|-----------|---------------|-------|
-| **common** | Missing at root | No | Library — needs Dockerfile for pipeline |
-| **database** | Flyway-based | No | Migrations only, config looks correct |
-| **datafetch** | Go multi-stage | No | Dockerfile ready, enable tests |
-| **datapipeline** | Go multi-stage | No | Dockerfile ready, enable tests |
-| **event-publisher** | Missing at root | No | Needs Dockerfile |
-| **go-solace-sdk** | Missing at root | No | SDK library — needs Dockerfile, has tests to enable |
+*Last verified: 2026-04-29 against `/Users/joaopires/Projects/sonae/esl/`*
 
-### Action Items Per Project
+| Project | Language | Dockerfile @ root | Tests written | Tests enabled in pipeline | Image name (config) |
+|---------|----------|-------------------|---------------|---------------------------|---------------------|
+| **common** | Go (shared lib) | Missing | Yes (unit + integration) | No | empty → repo-named |
+| **database** | Flyway 12.1.0-alpine | Present | N/A | N/A | `application` ⚠ blueprint says `db` |
+| **datafetch** | Go | Present (multi-stage distroless) | Yes (unit + integration) | No | `application` |
+| **datapipeline** | Go | Present (multi-stage distroless, digest-pinned) | Yes (unit + integration) | No | `application` |
+| **event-publisher** | Go + CGO (distroless-base/glibc) | Present *(added since original blueprint)* | Yes (unit + integration) | No | empty → repo-named |
+| **go-solace-sdk** | Go SDK | Missing | Yes (unit + integration) | No | empty → repo-named |
+
+All six repos have the standard `.github/workflows/` set and `config-workflows/config-files/` (config, images, deploy, security).
+
+### Cross-cutting gaps (affect every project)
+
+1. **`stack: dotnet-sdk-9.0`** in every `config.yaml` — no project is .NET. Need the correct Go stack identifier from DevTools&Pipelines.
+2. **`run_unit_tests` / `run_integration_tests` / `run_code_coverage` / `run_sonarqube` all `false`** — tests exist in code, the pipeline just doesn't run them.
+3. **No SonarQube wiring** — `run_sonarqube: false` everywhere; no `sonar-project.properties` or scanner step.
+4. **`run_sast` / `run_sca` are `false`** in every `security_config.yaml` — needs security-team approval to flip on.
+5. **`deploy-config.yaml` only defines a `dev:` block** with `runMigrations: true` — `tst`, `pp`, `prd` blocks are missing.
+6. **Image-name convention inconsistent** — `datafetch`, `datapipeline`, `database` use `name: application`; `common`, `event-publisher`, `go-solace-sdk` leave it empty (= repo-named, per blueprint).
+7. **Go Dockerfiles emit no test/Sonar reports** — no `/reports/testresults` or `/reports/sonar` outputs. Decision needed: add a test stage to each Dockerfile, or run `go test` in the pipeline outside the image build.
+
+### Action items per project
 
 **datafetch & datapipeline** (most ready):
-- [ ] Set `stack` to appropriate Go value (currently says `dotnet-sdk-9.0`)
-- [ ] Set `run_unit_tests: true` once test harness outputs to `/reports/`
-- [ ] Verify Dockerfile outputs match required paths (`/reports/testresults`, `/app/publish`)
+- [ ] Fix `stack` field to the Go identifier
+- [ ] Resolve gap 7 (test stage in Dockerfile, or pipeline-side `go test`)
+- [ ] Flip `run_unit_tests`, `run_integration_tests`, `run_code_coverage` to `true`
+- [ ] Decide whether `name: application` should become empty (repo-named) for consistency
 
-**database:**
-- [ ] Verify `images-config.yaml` image name (`application` vs `db` naming)
-- [ ] Confirm Flyway migrations work through the pipeline
+**event-publisher** (Dockerfile now exists, otherwise same posture):
+- [ ] Same as datafetch/datapipeline
+- [ ] Confirm pipeline build agent supports `--mount=type=secret,id=github_token_packages` (CGO build needs the Solace SDK fetched from a private repo)
 
-**common & event-publisher & go-solace-sdk:**
-- [ ] Create Dockerfile at project root (based on `config-workflows/DockerFile/Dockerfile-template`)
-- [ ] Update `images-config.yaml` to point to the new Dockerfile
-- [ ] For go-solace-sdk: decide if it needs a Docker image or is package-only (set `package_build: true` instead?)
+**database**:
+- [ ] Fix `stack` field
+- [ ] Verify `images-config.yaml` — currently `name: application`, blueprint mandates `name: db` for Flyway images; likely a misconfiguration
+- [ ] Confirm Flyway migrations run via `runMigrations: true` per env
 
-**All projects:**
-- [ ] Fix `stack` field in `config.yaml` — currently all say `dotnet-sdk-9.0` but Go projects should use the correct Go stack identifier
-- [ ] Enable `run_sonarqube: true` and configure SonarQube integration
-- [ ] Review and enable SAST/SCA in `security_config.yaml`
-- [ ] Ensure feature branches follow `feature/{JIRA_ID}` naming convention
-- [ ] Ensure all commit messages follow Conventional Commits
+**common** (Go shared library, no main binary):
+- [ ] Decide: produce a Docker image, or set `package_build: true` / `docker_container_image: false`?
+- [ ] If image: create Dockerfile from `config-workflows/DockerFile/Dockerfile-template`
+- [ ] Fix `stack` field; enable tests
+
+**go-solace-sdk** (Go SDK, package-style):
+- [ ] Same decision as `common` — `docker_container_image: true` is probably wrong for an SDK
+- [ ] Fix `stack` field; enable tests
+
+**All projects**:
+- [ ] Add `tst`, `pp`, `prd` blocks to `deploy-config.yaml` with team-specific overrides
+- [ ] Configure SonarQube (project key, scanner integration, `run_sonarqube: true`)
+- [ ] Coordinate with security team to enable `run_sast` and `run_sca`
+- [ ] Confirm feature branches use `feature/{JIRA_ID}` and commits use Conventional Commits
 
 ---
 
