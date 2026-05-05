@@ -122,7 +122,7 @@ WHERE ("retail_chain_id", "store_id", "item_id") IN (($1,$2,$3), ($4,$5,$6), ...
 Key aspects:
 
 - **Explicit column list** — derived from the incoming record's `RawData` keys. No `SELECT *` — only columns being upserted are fetched, avoiding false diffs from database-only columns.
-- **`::TEXT` casting** — all values are cast to TEXT to avoid Go type mismatches (e.g., `int32` vs `float64`, `time.Time` vs `string`). Both sides are normalised to strings for comparison.
+- **`::TEXT` casting** — all values are cast to TEXT to avoid Go type mismatches (e.g., `int32` vs `float64`, `time.Time` vs `string`). Both sides are normalised to strings for comparison. NUMERIC columns receive an additional decimal-canonicalization pass (see [Value normalisation](#value-normalisation) below) so that scale differences between the stored form and the source representation do not produce spurious diffs.
 - **Single round-trip** — one batched SELECT per entity type, using a composite `IN` clause.
 
 The query runs within the transaction. Under READ COMMITTED isolation (the PostgreSQL default), this is safe because the Data Pipeline is the sole writer to entity tables — no concurrent modifications can occur between the SELECT and the subsequent upsert.
@@ -166,6 +166,21 @@ Both sides (incoming `RawData` values and database TEXT values) are normalised t
 | Postgres arrays | Parsed, sorted, and normalised to a canonical form |
 
 This normalisation ensures that semantically equal values are never flagged as changes — for example, a Postgres TEXT timestamp `2024-10-04 08:31:38.879+00` matches an incoming RFC3339 value `2024-10-04T08:31:38.879Z`.
+
+#### NUMERIC columns
+
+NUMERIC columns require an extra step. The `::TEXT` cast preserves the column's declared scale (e.g., `8.00` for `NUMERIC(12,2)`), while the source value may arrive as a JSON number (`8` → Go `float64`) or a JSON string with a different scale (`"8.0"`). Without explicit handling, every record in every batch would emit an UPDATED event purely for scale or type formatting differences.
+
+To avoid this, NUMERIC columns are declared per entity type and routed through a decimal-canonicalization pass that:
+
+- Trims trailing zeros after the decimal point (`8.00` → `8`, `49.90` → `49.9`)
+- Removes an empty fractional part (`8.` → `8`)
+- Collapses negative zero (`-0` → `0`)
+- Accepts equivalent inputs across `float64`, `int`, `int64`, JSON numbers, and decimal-formatted strings
+
+So `8.00` (DB), `8` (JSON number), and `"8.0"` (JSON string) all reduce to the same canonical form and compare equal. The declaration is verified at sink startup against the live `information_schema`: a warning is logged if a declared column is missing from the schema, or if the schema contains a NUMERIC column not declared in the registry.
+
+This handling is applied only to declared columns. String columns whose values happen to look numeric (e.g., zero-padded codes such as `"009648"`) are not affected, so legitimate value differences in non-NUMERIC columns continue to surface as UPDATED events.
 
 #### Timestamp handling in payloads
 

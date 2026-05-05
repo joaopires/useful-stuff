@@ -2,7 +2,7 @@
 
 **Scope:** `datapipeline` project — CDC detection in the sink
 **Depends on:** shared package (esl-common latest commit on main), database migrations (V1.0.0.15–17)
-**Status:** Prerequisites done — CDC implementation not started
+**Status:** Implemented 2026-04-06 (commit 1704dd2). Subsequent fixes integrated below; numeric-column canonicalization shipped 2026-05-05 ([PR #36](https://github.com/sonaemc-instore/lac1041-instoreorchestrator_esl-datapipeline/pull/36)) — see [refactors/cdc-numeric-spurious-diff.md](../refactors/cdc-numeric-spurious-diff.md).
 
 ## Prerequisite tasks
 
@@ -24,7 +24,7 @@ Includes: pool creation via `commonpg.NewPool`, error classification via `common
 |----------|--------|-----------|
 | Single-writer assumption | READ COMMITTED (default) | The datapipeline is the sole writer to entity tables. No concurrent writes means no risk of missed diffs between SELECT and upsert. If another service starts writing, revisit isolation level (SERIALIZABLE or row-level locking). Add code comment at `pool.Begin()`. |
 | Conflict keys for CDC | `entity.ConflictKeys` from esl-common | Single source of truth for entity business keys. YAML `TableConfig.ConflictKeys` stays only for the upsert `ON CONFLICT` clause. Follow-up: remove YAML `ConflictKeys` duplication and have the upsert builder also read from `entity.ConflictKeys`. |
-| Type comparison | `::TEXT` cast in SELECT + string normalization | Avoids pgtype vs native Go type mismatches. Both sides normalized to string for comparison. |
+| Type comparison | `::TEXT` cast in SELECT for default string normalization; column-aware decimal canonicalization for declared NUMERIC columns | Default path normalizes both sides to string, sidestepping `pgtype` vs native Go type mismatches. NUMERIC columns are declared per entity in `entityNumericColumns` and routed through `normalizeDecimal` so `"8.00"` equals `8` equals `"8.0"`. Without this, NUMERIC scale alone produced ~99% of all UPDATED events as spurious diffs. A startup drift guard queries `information_schema` and logs WARN on divergence. See [refactors/cdc-numeric-spurious-diff.md](../refactors/cdc-numeric-spurious-diff.md). |
 | Column selection | Explicit column list from `RawData` keys | No `SELECT *` — only fetch columns being upserted. Avoids false diffs from DB-only columns. |
 | Error handling | First failing record stored + error propagated | CDC batch is atomic — first error rolls back everything. Store the triggering record in `records_with_errors` for debugging, propagate error via `Ack(err)` to all records in the batch. |
 
@@ -80,6 +80,7 @@ Total: 4–5 RTs. Each phase is a clean, single-responsibility step.
 | `internal/sink/postgres/cdc_test.go` | Unit tests for pure CDC functions |
 | `internal/sink/postgres/cdc_integration_test.go` | Integration tests against real Postgres |
 | `internal/sink/postgres/cdc_benchmark_test.go` | Benchmark: CDC vs non-CDC path |
+| `internal/sink/postgres/numeric_columns.go` | Per-entity declaration of NUMERIC columns for decimal canonicalization (added 2026-05-05) |
 
 ---
 
@@ -307,6 +308,15 @@ Handles the types present in `RawData` (from JSON deserialization):
 
 DB values arrive as `string` (via `::TEXT` cast) and are compared directly against normalized `RawData` values.
 
+**`normalizeDecimal` + `valuesEqual`** — column-aware decimal handling for NUMERIC columns:
+
+```go
+func normalizeDecimal(v any) (string, bool)
+func valuesEqual(col string, newVal, oldVal any, numericCols map[string]bool) bool
+```
+
+`normalizeDecimal` canonicalizes any decimal value (`float64`, `int`, `int64`, `json.Number`, or strings matching `^-?\d+(\.\d+)?$`) by trimming trailing zeros after the decimal point and collapsing `-0`. `valuesEqual` consults the per-entity `numericCols` set (from `entityNumericColumns`): for declared columns, both sides go through `normalizeDecimal` so `"8.00"` equals `8` equals `"8.0"`; non-numeric columns fall back to plain `normalizeValue` equality. `entityNumericColumns` lives in `numeric_columns.go` and is verified at startup against `information_schema` (logs WARN on drift).
+
 **`classifyAndDiff`** — compares incoming vs existing, returns change events:
 
 ```go
@@ -322,7 +332,7 @@ func classifyAndDiff(
 - Key in existing, fields differ → `event.ChangeTypeUpdated` (payload = `{"field": {"old": X, "new": Y}}` for changed business fields, plus `created_at` and `last_updated_at` as flat values)
 - Identical → skip
 - Comparison skips audit columns and conflict keys
-- Both sides normalized to string before comparison
+- Comparison goes through `valuesEqual`: declared NUMERIC columns are decimal-canonicalized; everything else falls back to string-normalized equality
 
 **`buildOutboxInsert`** — builds single multi-row INSERT for efficiency:
 
@@ -603,6 +613,13 @@ Table-driven:
 - `TestClassifyAndDiff_ConflictKeysExcluded` — conflict keys excluded from comparison and payloads
 - `TestClassifyAndDiff_TypeNormalization` — `float64(42)` normalized to `"42"` matches DB `"42"`
 - `TestNormalizeValue` — all types: string, float64 (whole + decimal), bool, []any, nil, time strings
+- `TestNormalizeDecimal` — decimal canonicalization across `float64`, `int`, `int64`, `json.Number`, strings; rejects `NaN`, `±Inf`, scientific notation, leading `+`, trailing/leading dots
+- `TestValuesEqual_NumericColumn` — covers number-vs-string and string-vs-string scale mismatches for NUMERIC cols, real diffs still detected, regression guard for non-NUMERIC columns (leading-zero strings like `"009648"` vs `"9648"` must remain unequal)
+- `TestClassifyAndDiff_NumericNoSpurious` — Vusion `price=8`/`custom_precioantes="8.0"` against DB `"8.00"` produces zero events
+- `TestClassifyAndDiff_NumericRealChange` — real price change emits one UPDATED with payload retaining source representation (no shape mutation)
+- `TestClassifyAndDiff_MixedSpuriousAndReal` — spurious NUMERIC diffs filtered out; only real fields appear in payload
+- `TestGroupByEntityType_PopulatesNumericColumns` — verifies the new `entityGroup.numericColumns` field is wired
+- `TestEntityNumericColumnsDeclared` — drift guard pinning the declared column set against the migrations audit
 - `TestBuildOutboxInsert` — correct SQL, JSON marshaling
 - `TestGroupByEntityType` — mixed types grouped correctly, entity types not in `entity.ConflictKeys` skipped
 
@@ -648,8 +665,11 @@ Batch sizes: 10, 50, 100, 500. Report ns/op and allocs.
 
 - **CDC overhead at batch_size=500**: +51% (mixed) to +100% (all new) latency overhead. Acceptable for current workloads (~4s extra on a full 240k-record sync). Documented in `docs/postgres-sink.md`. If it becomes a bottleneck, consider lowering batch size to 200-300, chunking outbox INSERT, or using COPY.
 
+- **NUMERIC column declaration is hand-authored**: `entityNumericColumns` (in `internal/sink/postgres/numeric_columns.go`) lists the columns whose values must be decimal-canonicalized for comparison. Today: `products.price` and `products.custom_precioantes`. The startup drift guard (`CDC.VerifyNumericColumns`) logs WARN if the declaration diverges from the live `information_schema`, but does not fail. New NUMERIC columns must be added manually to keep diffs free of scale-only spurious updates. Future work: full column-type registry per entity (Approach B1-full) — same comparison helpers, derived from a typed schema instead of a hand-list.
+
 ## Follow-up tasks (post-CDC)
 
 - **Standardize timestamp formats**: Unify the 4 timestamp representations (RFC3339 no millis, ISO 8601 with millis, `time.Time`, Postgres TEXT) to ISO 8601 with fractional seconds everywhere. Fixes the event payload inconsistency above. Requires its own plan.
 - **Remove YAML `ConflictKeys` duplication**: Have the upsert builder read from `entity.ConflictKeys` instead of `TableConfig.ConflictKeys`. Eliminates divergence risk and simplifies config.
 - **esl-common tag**: After CDC is validated in practice, create a new tag (e.g. `v0.2.0`) and update `go.mod` to reference it instead of a commit hash.
+- **Full column-type registry (Approach B1-full)**: replace `entityNumericColumns` with a typed per-entity column-type map. Removes drift risk on NUMERIC columns and pre-empts future type-asymmetry bugs (e.g. BIGINT). Triggered if a second type-asymmetry case appears or alongside the next sink-package refactor.

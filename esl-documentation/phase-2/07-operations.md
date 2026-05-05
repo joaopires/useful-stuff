@@ -406,7 +406,7 @@ If `shutdownTimeout` (default `30s`) is exceeded, Kubernetes sends SIGKILL. Cons
 
 > **Note: this is a temporary mechanism.** The active/passive setup and the manual failover procedure described below are interim measures adopted to enable multi-cluster operation within Phase 2 timelines. Future phases of the project will replace this with a more robust approach to multi-cluster scheduling — likely a DB-backed lease for automatic leader election — removing the need for coordinated `activeCluster` values flips. The values-flip mechanism documented here is not the long-term design.
 
-The ESL Orchestrator is deployed to two OpenShift clusters per environment in an active/passive pattern for the datapipeline CronJob. One cluster is designated active — that's where scheduled runs fire. The other renders the same chart but with `spec.suspend: true`, so the CronJob exists but never fires. The `datafetch` REST API and the `event-publisher` Deployment both stay active/active across both clusters; only the datapipeline CronJob is gated. The two event-publisher pods coordinate on the shared `event_outbox` via `SELECT … FOR UPDATE SKIP LOCKED`, so each row is processed by exactly one pod regardless of which cluster picks it up first.
+The ESL Orchestrator is deployed to two OpenShift clusters per environment in an active/passive pattern for the components that publish externally — the datapipeline CronJob and the event-publisher Deployment. One cluster is designated active. There the CronJob runs on schedule and the Deployment runs at its configured replica count. The other cluster renders the same chart but with `spec.suspend: true` on the CronJob and `spec.replicas: 0` on the Deployment, so both resources exist but neither fires nor runs pods. The `datafetch` REST API stays active/active across both clusters; only the two publishing components are gated. Gating event-publisher avoids duplicate publishes to Solace from two clusters running in parallel.
 
 ![Active/Passive cluster topology](diagrams/active-passive-topology.png)
 
@@ -427,7 +427,15 @@ suspend: {{ or $dp.suspend (ne .Values.clusterName .Values.activeCluster) }}
 
 On the active cluster, `clusterName == activeCluster` → `suspend: false`. On the passive cluster, `clusterName != activeCluster` → `suspend: true`.
 
-The `dataPipeline.suspend` override (see [06-deployment.md](06-deployment.md)) is an optional boolean that force-suspends the CronJob on top of the cluster check — useful for ad-hoc maintenance pauses on the active cluster without touching `activeCluster`. It is one-way: setting it to `false` cannot un-suspend the passive cluster.
+The event-publisher Deployment template renders:
+
+```yaml
+replicas: {{ if ne .Values.clusterName .Values.activeCluster }}0{{ else }}{{ $ep.replicaCount | default 1 }}{{ end }}
+```
+
+On the active cluster, replicas resolves to the configured `eventPublisher.replicaCount` (default `1`). On the passive cluster it resolves to `0`, so the Deployment object exists but has no pods.
+
+The `dataPipeline.suspend` override (see [06-deployment.md](06-deployment.md)) is an optional boolean that force-suspends the CronJob on top of the cluster check — useful for ad-hoc maintenance pauses on the active cluster without touching `activeCluster`. It is one-way: setting it to `false` cannot un-suspend the passive cluster. There is no equivalent override for event-publisher; to pause it on the active cluster, scale the Deployment manually or set `eventPublisher.replicaCount: 0`.
 
 Cluster identities per environment:
 
@@ -471,26 +479,31 @@ psql -c "SELECT client, sync_status, sync_end_time FROM esl.sync_state
 
 ### Post-failover verification
 
-Confirm the `suspend` flag flipped on both clusters:
+Confirm the CronJob `suspend` flag flipped and the event-publisher Deployment scaled on both clusters:
 
 ```sh
-# New active cluster — expect "false"
+# New active cluster — expect CronJob "false" and Deployment replicas >= 1
 kubectl --context <new-active> get cronjob -n instore-esl-orchestrator-prd \
   orchestrator-esl-datapipeline -o jsonpath='{.spec.suspend}'
+kubectl --context <new-active> get deploy -n instore-esl-orchestrator-prd \
+  orchestrator-esl-eventpublisher -o jsonpath='{.spec.replicas}'
 
-# Old active (now passive) — expect "true"
+# Old active (now passive) — expect CronJob "true" and Deployment replicas 0
 kubectl --context <old-active> get cronjob -n instore-esl-orchestrator-prd \
   orchestrator-esl-datapipeline -o jsonpath='{.spec.suspend}'
+kubectl --context <old-active> get deploy -n instore-esl-orchestrator-prd \
+  orchestrator-esl-eventpublisher -o jsonpath='{.spec.replicas}'
 ```
 
 After the next schedule tick:
 
 - A new Job is created on the new active cluster; no Job is created on the old active.
 - `esl.sync_state` shows one new row for `esl-orchestrator-prd` with the expected `sync_end_time`.
+- Event-publisher pods are running on the new active cluster and absent on the old active; new outbox rows are drained by the new active's pods.
 
 ### Rollback
 
-Edit the same values file and flip `activeCluster` back to the original cluster. Verification steps are identical — `suspend: false` should reappear on the original active cluster and `true` on the other.
+Edit the same values file and flip `activeCluster` back to the original cluster. Verification steps are identical — `suspend: false` and event-publisher replicas >= 1 should reappear on the original active cluster, and `suspend: true` with replicas `0` on the other.
 
 ## Disaster Recovery
 

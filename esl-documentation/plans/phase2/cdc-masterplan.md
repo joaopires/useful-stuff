@@ -43,7 +43,7 @@ Connector → Transformer → Sink ──┐
 | Solace topics | `esl/events/{entity_type}` | Event type in payload, not topic. Schema TBD |
 | Feature flag | `cdc.enabled` in sink config | Safe rollout, existing behavior preserved when off |
 | Comparison scope | All non-PK, non-audit columns | `created_at`/`last_updated_at` excluded from comparison; conflict keys excluded (in `EntityKey`); source `modification_date` included |
-| Type comparison strategy | `::TEXT` cast in SELECT + string normalization | Avoids pgtype vs native Go type mismatches (e.g. `int32` vs `float64`, `time.Time` vs `string`). Both sides normalized to string for comparison. |
+| Type comparison strategy | `::TEXT` cast in SELECT for default string normalization; column-aware decimal canonicalization for declared NUMERIC columns | Avoids `pgtype` vs native Go type mismatches (e.g. `int32` vs `float64`, `time.Time` vs `string`). Default path normalizes both sides to string. NUMERIC columns are declared per entity in `entityNumericColumns` and routed through `normalizeDecimal` so `"8.00"` equals `8` equals `"8.0"`. Without this, NUMERIC scale differences alone produced ~99% of all UPDATED events. A startup drift guard queries `information_schema` and logs WARN if the declared set diverges. See [refactors/cdc-numeric-spurious-diff.md](../refactors/cdc-numeric-spurious-diff.md). |
 | Single-writer assumption | READ COMMITTED (default isolation) | The datapipeline is the sole writer to entity tables. No concurrent writes means no risk of missed diffs between SELECT and upsert within the CDC transaction. If another service starts writing to entity tables, revisit isolation level (SERIALIZABLE or row-level locking). |
 | CDC conflict keys | `entity.ConflictKeys` from esl-common | Single source of truth for entity business keys in CDC. YAML `TableConfig.ConflictKeys` stays only for the upsert `ON CONFLICT` clause (follow-up: unify). |
 | Outbox status tracking | Explicit `status` column (`PENDING`, `DELIVERED`, `FAILED`) | Enables failure tracking and observability; `delivered_at` kept for timestamp |
@@ -100,6 +100,7 @@ Connector → Transformer → Sink ──┐
 | 11 | DELETED event detection (pulled forward from Phase 3) | Done (2026-04-16) — database, datapipeline, datafetch, event-publisher, docs merged; e2e pending |
 | 12a | go-solace-sdk: OAuth2 E2E test (Keycloak + Solace) | Done (2026-04-23, commit 63525b5) — per [event-publisher-oauth2.md](../event-publisher-oauth2.md) Phase A |
 | 12b | event-publisher: adopt OAuth2 (`auth_scheme` config) | Done (2026-04-23) — per [event-publisher-oauth2.md](../event-publisher-oauth2.md) Phase B; SDK bumped to pseudo-version containing 63525b5 |
+| 13 | datapipeline: fix CDC NUMERIC spurious diffs | Done (2026-05-05, [PR #36](https://github.com/sonaemc-instore/lac1041-instoreorchestrator_esl-datapipeline/pull/36)) — column-aware decimal canonicalization for `products.price` + `products.custom_precioantes`; eliminated ~99.9% of product UPDATEDs in production audit. See [refactors/cdc-numeric-spurious-diff.md](../refactors/cdc-numeric-spurious-diff.md). |
 
 ## Documentation
 
@@ -157,3 +158,4 @@ Documentation should be written incrementally — each completed scoped plan pro
 - [store-sync-state-retail-chain.md](../refactors/store-sync-state-retail-chain.md) — Add retail_chain_id to store_sync_state (required after store ID stripping)
 - [cdc-k8s-helm.md](cdc-k8s-helm.md) — Helm chart changes
 - [cdc-deleted-detection.md](cdc-deleted-detection.md) — DELETED event detection for products + labels via Vusion `deleted=true` flag, soft-delete (`deletion_date` + `deleted_at`)
+- [cdc-numeric-spurious-diff.md](../refactors/cdc-numeric-spurious-diff.md) — column-aware decimal canonicalization for NUMERIC columns; eliminates spurious UPDATED diffs caused by DB-stored scale vs source representation
