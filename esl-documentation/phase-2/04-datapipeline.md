@@ -163,7 +163,7 @@ Both sides (incoming `RawData` values and database TEXT values) are normalised t
 | `nil` | `"<nil>"` |
 | `[]any` | Sorted, JSON-marshalled |
 | Timestamps | Parsed and normalised (RFC3339, RFC3339Nano, and Postgres TEXT formats are all equivalent) |
-| Postgres arrays | Parsed, sorted, and normalised to a canonical form |
+| Postgres arrays | Parsed, sorted, and emitted as a canonical JSON array string (`["a","b"]`) — same form as the `[]any` row above, so a pristine slice in `RawData` compares equal to a `::TEXT`-cast array literal from the database |
 
 This normalisation ensures that semantically equal values are never flagged as changes — for example, a Postgres TEXT timestamp `2024-10-04 08:31:38.879+00` matches an incoming RFC3339 value `2024-10-04T08:31:38.879Z`.
 
@@ -182,9 +182,14 @@ So `8.00` (DB), `8` (JSON number), and `"8.0"` (JSON string) all reduce to the s
 
 This handling is applied only to declared columns. String columns whose values happen to look numeric (e.g., zero-padded codes such as `"009648"`) are not affected, so legitimate value differences in non-NUMERIC columns continue to surface as UPDATED events.
 
-#### Timestamp handling in payloads
+#### Payload value normalisation
 
-Values included in event payloads go through a separate normalisation step (`normalizePayloadValue`) that converts Postgres TEXT timestamps to `time.Time` values. When JSON-marshalled for the outbox, these become RFC3339 format — ensuring a consistent representation in published events regardless of how timestamps were originally stored in the database.
+Values included in event payloads go through a separate normalisation step (`normalizePayloadValue`) that converts strings sourced from `::TEXT`-cast columns back to native Go types before JSON-marshalling:
+
+- **Timestamps** become `time.Time` and serialise as RFC3339Nano, so an outbox payload sees the same timestamp shape regardless of whether the value came from pristine `RawData` (incoming JSON) or from a database fetch (Postgres TEXT format).
+- **Postgres array literals** become `[]any` and serialise as proper JSON arrays (`["a","b"]`) — required because UPDATE event payloads carry an `old` value sourced from the database (PG literal) alongside a `new` value sourced from pristine `RawData` (real Go slice). Without this normalisation, `old` would round-trip into JSONB as a quoted string while `new` would be a real array.
+
+This keeps the JSONB payload shape uniform across CREATED and UPDATED events.
 
 ## Outbox Write
 
