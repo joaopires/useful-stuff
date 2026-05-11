@@ -25,8 +25,8 @@ cannot express it.
 
 References:
 
-- Sink CDC dispatch: [`executeBatchWithCDC`](../../sonae/esl/datapipeline/internal/sink/postgres/write_batch.go) (`internal/sink/postgres/write_batch.go:196`)
-- VLink `deleted=true` gate: [`buildPagedRequest`](../../sonae/esl/datapipeline/internal/connector/vusion/vlink/client.go) (`internal/connector/vusion/vlink/client.go:300`)
+- Sink CDC dispatch: [`executeBatchWithCDC`](../../sonae/esl/datapipeline/internal/sink/postgres/write_batch.go) (`internal/sink/postgres/write_batch.go:277`, called from `executeBatch:197`)
+- VLink `deleted=true` gate: [`doRequest`](../../sonae/esl/datapipeline/internal/connector/vusion/vlink/client.go) (`internal/connector/vusion/vlink/client.go:288`; field read at `:303`)
 - Per-store state load: [`doSync`](../../sonae/esl/datapipeline/internal/connector/vusion/sync.go) (`internal/connector/vusion/sync.go:169`)
 - State interface: [`Store`](../../sonae/esl/datapipeline/internal/state/state.go) (`internal/state/state.go:55`)
 
@@ -81,7 +81,11 @@ phase 1 (stream stores) ──┐
                           ├──► GetLatestSuccessfulStoreRuns(storeKeys)
                           │            │
                           │            ▼
-                          │   onStoreStatesLoaded(states)  ──► snk.SetIncrementalStoreFilter(states)
+                          │   (connector projects map[StoreKey]*StoreSyncRun
+                          │    down to the keys-only set used for gating)
+                          │            │
+                          │            ▼
+                          │   onStoreStatesLoaded(eligibleKeys)  ──► snk.SetCDCEligibleStores(eligibleKeys)
                           │                                              │
                           │                                              ▼
                           │                                    cdc.eligibleStores set
@@ -97,27 +101,32 @@ phase 2 (per-store fetch) ──► VLink calls with per-store includeDeleted fl
 No schema changes. The existing `store_sync_state` table and
 `GetLatestSuccessfulStoreRuns` already give us the predicate.
 
-### 2. Sink — add per-run incremental-store filter
+### 2. Sink — add per-run CDC-eligible store registry
 
 [`internal/sink/postgres/postgres.go`](../../sonae/esl/datapipeline/internal/sink/postgres/postgres.go)
 
 Add a field on `PostgresSink`:
 
 ```go
-// incrementalStores is the set of (RetailChainID, StoreID) pairs whose
+// cdcEligibleStores is the set of (RetailChainID, StoreID) pairs whose
 // non-Store records should produce CDC outbox events when CDC is
 // enabled. Records whose store is not in the set still upsert but
 // skip change-detection. Store-entity records are exempt (always
 // eligible) — see filterEligible. Set once per run via
-// SetIncrementalStoreFilter; nil means "no stores eligible" (e.g.
-// CDC disabled or filter never installed).
-incrementalStores atomic.Pointer[map[state.StoreKey]struct{}]
+// SetCDCEligibleStores. A nil pointer means the set has not been
+// installed yet — every record is treated as eligible, matching the
+// pre-rollout default. This is the safe no-op for step 1 of the
+// rollout (where the partition lands without a caller wiring the
+// callback) and for test fixtures that don't exercise per-store
+// gating. Once step 3 wires the connector callback, every production
+// run installs a (possibly empty) set before the first Write.
+cdcEligibleStores atomic.Pointer[map[state.StoreKey]struct{}]
 ```
 
 Add a setter on the `Sink` interface ([`internal/sink/sink.go`](../../sonae/esl/datapipeline/internal/sink/sink.go)):
 
 ```go
-// SetIncrementalStoreFilter installs the set of stores eligible for CDC
+// SetCDCEligibleStores installs the set of stores eligible for CDC
 // event emission for the current run. Records belonging to stores
 // outside this set still persist normally but produce no outbox
 // events for non-Store entity types. Store-entity records are exempt
@@ -125,7 +134,7 @@ Add a setter on the `Sink` interface ([`internal/sink/sink.go`](../../sonae/esl/
 // downstream. Must be called before any Write that may trigger CDC;
 // calling after Write is permitted but races on the goroutine
 // boundary.
-SetIncrementalStoreFilter(stores map[state.StoreKey]struct{})
+SetCDCEligibleStores(stores map[state.StoreKey]struct{})
 ```
 
 Goes on the interface (not just the concrete type) so test fixtures
@@ -149,10 +158,10 @@ func (c *CDC) DetectChanges(
     ctx context.Context,
     tx pgx.Tx,
     records []*models.Record,
-    tables map[entity.Type]string,
+    tables map[string]TableConfig,
     batchTimestamp time.Time,
     eligible map[state.StoreKey]struct{}, // new
-) ([]changeEvent, error) {
+) ([]event.ChangeEvent, error) {
     eligibleRecords := filterEligible(records, eligible)
     if len(eligibleRecords) == 0 {
         return nil, nil
@@ -175,20 +184,32 @@ func filterEligible(
     records []*models.Record,
     eligible map[state.StoreKey]struct{},
 ) []*models.Record {
+    // Nil eligible ⇒ caller has not installed the set; treat every
+    // record as eligible (pre-rollout default). This makes step 1 of
+    // the rollout a no-op.
+    if eligible == nil {
+        return records
+    }
     out := make([]*models.Record, 0, len(records))
-    for _, r := range records {
-        if r.EntityType == entity.Store {
-            out = append(out, r)
+    for _, record := range records {
+        entityType, _ := record.Metadata["type"].(string)
+        if entityType == entity.Store {
+            out = append(out, record)
             continue
         }
-        key := storeKeyOf(r) // (retail_chain_id, store_id) from conflict keys
+        key := storeKeyOf(record) // (retail_chain_id, store_id) from conflict keys
         if _, ok := eligible[key]; ok {
-            out = append(out, r)
+            out = append(out, record)
         }
     }
     return out
 }
 ```
+
+Note: entity types in this codebase are bare strings (see
+`entity.Store = "store"`) and are carried on records via
+`Metadata["type"]`, not a typed struct field. The pseudocode reflects
+that.
 
 Volume note: a brand-new store under this gate emits exactly one
 `Store CREATED` event and zero Product/Label/AccessPoint events.
@@ -196,8 +217,14 @@ That's the desired outcome — one event per onboarded store, no flood.
 
 `executeBatchWithCDC` ([`write_batch.go:277`](../../sonae/esl/datapipeline/internal/sink/postgres/write_batch.go)) passes the
 loaded eligibility set into `DetectChanges`. The set is read once per
-batch via `s.incrementalStores.Load()` and passed in; nil ⇒ empty set
-(skip CDC entirely for the batch, but still upsert).
+batch via `s.cdcEligibleStores.Load()` and passed in. A nil pointer
+(no caller has installed the set yet) means "all records eligible" —
+the pre-rollout default — so `filterEligible` is a pass-through and
+CDC behaves exactly as it does today. Once step 3 of the rollout
+wires the connector callback, every production run installs a
+(possibly empty) concrete set before the first Write reaches the
+sink, so the nil branch is in practice only used during rollout step 1
+and in tests.
 
 ### 4. Connector — emit eligibility callback
 
@@ -208,35 +235,92 @@ Add an optional callback on the connector struct:
 ```go
 type vusionConnector struct {
     // …existing
-    onStoreStatesLoaded func(states map[state.StoreKey]*state.StoreSyncRun)
+    onStoreStatesLoaded func(eligible map[state.StoreKey]struct{})
 }
 ```
 
+The callback receives **just the keys** of stores with prior successful
+sync (not the full `*StoreSyncRun` values). The sink only needs the
+predicate; emitting the keys-only shape directly from the connector
+keeps the orchestrator free of any conversion step and avoids leaking
+`StoreSyncRun` into a sink-facing contract.
+
 In `doSync`, immediately after the successful
 `GetLatestSuccessfulStoreRuns` call (line 169) and before phase 2 starts,
-invoke the callback if non-nil. The callback runs synchronously on the
-sync goroutine; sink-side work behind it must be fast (it is — just a
-map copy).
+build a `map[state.StoreKey]struct{}` projection from `storeStates` and
+invoke the callback with it (if non-nil). The callback runs
+synchronously on the sync goroutine; sink-side work behind it must be
+fast (it is — an `atomic.Pointer.Store` of a single map).
 
-Constructor / builder accepts an `OnStoreStatesLoaded(fn ...)` option.
+Connector construction: add an `OnStoreStatesLoaded
+func(map[state.StoreKey]struct{})` field on `ConnectorOptions` (see
+`vusion.go:55-91`). `NewVusionConnector` copies it from `opts` into the
+private `onStoreStatesLoaded` field on `vusionConnector`. No builder
+pattern is involved — the connector uses an options struct today and
+this slots in alongside the existing fields.
+
+#### Race window — why the publish is safe
+
+The callback fires synchronously on the sync goroutine **before** phase
+2's worker pool starts (`pool.Start()` at `sync.go:230`). The sink-side
+setter publishes the new set via `atomic.Pointer.Store`, and every
+phase 2 record path that calls `executeBatchWithCDC` reads it back via
+`.Load()`. Go's `atomic.Pointer` guarantees a happens-before
+relationship between the publishing `Store` and a subsequent `Load`,
+so phase 2 workers always observe the populated set.
+
+The only records that flow before the callback runs are phase 1's
+`Store` entity records (lines 117-125 of `sync.go`). Those are exempt
+from the filter unconditionally (`Store` entity always CDC-eligible),
+so they would be passed through even if the sink were operating on
+the nil/pre-rollout default. The race window is therefore benign.
+
+If `GetLatestSuccessfulStoreRuns` returns an error, `doSync` aborts at
+`sync.go:178` before phase 2 starts and the callback is never
+invoked. No record reaches the sink in that path, so the sink
+retaining its pre-callback (nil) state never matters operationally.
 
 ### 5. VLink — per-call `includeDeleted`
 
 [`internal/connector/vusion/vlink/client.go`](../../sonae/esl/datapipeline/internal/connector/vusion/vlink/client.go)
 
-Drop `includeDeleted` from `vlinkClient`. Plumb it through the call
-chain:
+Drop the `includeDeleted bool` field from `vlinkClient` (currently at
+`client.go:35`). Plumb the value through the call chain instead:
 
-- Public methods that fetch products / labels / access points take an
-  additional `includeDeleted bool` parameter.
-- `streamAllPages` and the page-fetch helper accept and forward it.
-- `buildPagedRequest` (around line 300) reads it from the call argument
-  rather than the client field.
+- The four public list methods gain an `includeDeleted bool` parameter
+  in their signatures:
+  - `StreamAllProducts`
+  - `StreamProductsModifiedSince`
+  - `StreamAllLabels`
+  - `StreamLabelsModifiedSince`
+
+  Access-point records are extracted from the store object on the
+  connector side (see `extractAccessPointRecords` in `sync.go`), so
+  VLink has no access-point endpoint to plumb.
+- The generic `streamAllPages` helper does not need to change — it
+  already takes a `fetchPage` closure. The closures inside
+  `StreamAllProducts` / `StreamProductsModifiedSince` /
+  `StreamAllLabels` / `StreamLabelsModifiedSince` forward the new
+  argument into `getAllProducts` / `getAllLabels`.
+- `getAllProducts` and `getAllLabels` accept `includeDeleted` and
+  thread it into `doRequest`.
+- `doRequest` (`client.go:288`) reads `includeDeleted` from its
+  argument and sets the `deleted=true` query param accordingly
+  (currently this branch reads `vlc.includeDeleted` at `client.go:303`).
+- `NewClient` loses the `includeDeleted bool` parameter (currently at
+  `client.go:50`).
+
+The `VLinkClient` interface in `vusion.go:24-30` changes to match.
+Existing mocks and call sites must be updated (see Rollout step 2).
 
 The connector's `processStoreEntities`
-([`sync.go:255`](../../sonae/esl/datapipeline/internal/connector/vusion/sync.go)) computes
+([`sync.go:251`](../../sonae/esl/datapipeline/internal/connector/vusion/sync.go)) computes
 `cdcEnabled && params.syncMode == SyncModeIncremental` and forwards it
-to each VLink call.
+to each VLink call. Note: `params.syncMode` is itself derived from
+`storeStates[key]` exists/absent at `sync.go:197-210`, so the
+per-call `includeDeleted` and the sink-side eligibility set are
+necessarily consistent — both come from the same `storeStates` map at
+the same point in time.
 
 This means full-sync stores never request `deleted=true`, even when CDC
 is globally enabled. Consistent with the sink-side gate: no DELETED
@@ -246,18 +330,36 @@ records in, no DELETED events out.
 
 [`cmd/eslorchestrator/run.go`](../../sonae/esl/datapipeline/cmd/eslorchestrator/run.go)
 
-In `createPipeline` / `createConnector`:
+Today `createConnector` runs **before** `createSink` in `createPipeline`
+(`run.go:264-273`). That order needs to flip so the connector's
+`OnStoreStatesLoaded` callback can reference the sink at construction
+time.
 
-- Build the connector with an `OnStoreStatesLoaded` callback that
-  converts the `map[StoreKey]*StoreSyncRun` to `map[StoreKey]struct{}`
-  and calls `snk.SetIncrementalStoreFilter(set)`.
-- VLink client construction loses the `cdcEnabled` argument (now
-  per-call). The connector itself keeps `cdcEnabled` to make the
-  per-call decision in `processStoreEntities`.
+Reorder `createPipeline` to:
 
-The existing comment block on `cdcEnabled` ("must include deleted rows
-in its paginated walk for the sink to ever see DELETED records") gets
-updated to reflect the per-store decision.
+1. Build the sink first via `createSink`.
+2. Build the connector via `createConnector(..., snk)`, passing the
+   sink in.
+3. Continue with transformer + pipeline builder as today.
+
+Inside the new `createConnector` signature:
+
+- Take the sink as a parameter.
+- Build the connector with
+  `ConnectorOptions{OnStoreStatesLoaded: snk.SetCDCEligibleStores, ...}`.
+  Because the callback type is `func(map[state.StoreKey]struct{})` —
+  exactly the signature of `SetCDCEligibleStores` on the `Sink`
+  interface — no adapter or conversion is needed. The method value
+  itself is the callback.
+
+VLink client construction loses the `cdcEnabled` argument (now
+per-call). The connector itself keeps `cdcEnabled` to make the
+per-call decision in `processStoreEntities`.
+
+The existing comment block on `cdcEnabled` in `createPipeline` ("must
+include deleted rows in its paginated walk for the sink to ever see
+DELETED records") becomes outdated. Replace it with a one-line note
+that the connector now decides per store and per call.
 
 ## Testing
 
@@ -272,9 +374,10 @@ updated to reflect the per-store decision.
   param; `false` omits it. Existing client-level flag tests removed
   or rewritten.
 - `sync_test.go` (connector): mock state store returning a partial map;
-  assert `OnStoreStatesLoaded` invoked with the same map; assert
-  per-store VLink calls receive `includeDeleted=true` only for stores
-  with prior state.
+  assert `OnStoreStatesLoaded` invoked with the keys-only projection
+  (`map[StoreKey]struct{}`) — i.e. exactly the keys of the partial map
+  returned by the state store. Assert per-store VLink calls receive
+  `includeDeleted=true` only for stores with prior state.
 
 ### Integration tests (testcontainers)
 
@@ -330,13 +433,25 @@ Files to update under `esl-documentation/phase-2/`:
      event, and suppresses the per-entity event flood. No special
      procedure required.
   2. **Forcing a full re-sync for an existing store**: deleting only
-     `store_sync_state` is insufficient — entity rows for that store
-     in `products`, `labels`, and `access_points` will go stale (no
-     `deleted=true` fetch happens during a full sync, so VLink
-     soft-deletes after the wipe never reach the sink). The wipe must
-     also delete the corresponding entity rows. Provide a SQL snippet
-     that performs all four deletes for a given
-     `(retail_chain_id, store_id)` in one transaction.
+     `store_sync_state` is insufficient. The runbook must spell out a
+     SQL snippet that deletes from **four** tables for a given
+     `(retail_chain_id, store_id)` in one transaction:
+     - `store_sync_state` — to force the per-store gate to treat the
+       store as "no prior history" on the next run.
+     - `stores` — **required**, not optional. Without this delete the
+       sink's `stores` row still exists, the next run's Store record
+       diffs as UNCHANGED, no `Store CREATED` event fires, and
+       downstream consumers never learn that the catalogue is being
+       re-bootstrapped. This contradicts the "Store entity always
+       CDC-eligible" decision the per-store gate is built around.
+     - `products`, `labels`, `access_points` — to prevent stale rows.
+       A full sync re-upserts the active set but never deletes, and
+       VLink soft-deletes after the wipe never reach the sink (no
+       `deleted=true` fetch in full-sync mode).
+
+     All four deletes must run in a single transaction so the next
+     run's start sees a consistent "no rows for this store" view
+     across all tables.
 - Phase 2 PDF — regenerate via `make` after the markdown updates.
 
 ## Decisions
@@ -344,7 +459,7 @@ Files to update under `esl-documentation/phase-2/`:
 These were open questions during design; closed before this plan was
 finalised.
 
-1. **`SetIncrementalStoreFilter` lives on the `Sink` interface**, not
+1. **`SetCDCEligibleStores` lives on the `Sink` interface**, not
    the concrete `*PostgresSink`. Better testability — fixtures can
    fake the sink without depending on the postgres type. Non-postgres
    sinks implement it as a no-op.
@@ -373,11 +488,26 @@ finalised.
 
 1. Land sink + CDC partition (steps 2–3) — backwards compatible: with
    no filter installed, behaviour is "all records eligible," matching
-   today.
+   today. This PR adds `SetCDCEligibleStores` to the `Sink` interface,
+   so it must include a `make mock-gen` regeneration of
+   [`mocks/Sink_mock.go`](../../sonae/esl/datapipeline/mocks/Sink_mock.go).
+   The generated mock will gain the new method automatically; only
+   test sites that explicitly assert on `SetCDCEligibleStores` (none
+   today) would need additional setup.
 2. Land VLink per-call refactor (step 5) — pure refactor; behaviour
-   unchanged when caller passes the same flag everywhere.
+   unchanged when caller passes the same flag everywhere. This PR
+   changes the `VLinkClient` interface signatures and requires
+   regenerating [`mocks/v_link_client_mock.go`](../../sonae/esl/datapipeline/mocks/v_link_client_mock.go)
+   via `make mock-gen`. Existing call sites in
+   `internal/connector/vusion/sync_test.go` and `vusion_test.go` —
+   which stub `StreamAllProducts`, `StreamProductsModifiedSince`,
+   `StreamAllLabels`, and `StreamLabelsModifiedSince` — need their
+   argument lists updated. Concrete callers in non-test code (only
+   `vusion.go`'s streamProductRecords / streamLabelRecords paths)
+   also need the new argument.
 3. Land connector callback + orchestrator wiring (steps 4 + 6) —
-   activates the new behaviour. Single PR.
+   activates the new behaviour. Single PR. Includes the `createPipeline`
+   reorder (sink-before-connector) called out in Section 6.
 4. Documentation PR (repo + phase 2) once the code lands.
 
 No feature flag — the change is correctness-focused and the previous
