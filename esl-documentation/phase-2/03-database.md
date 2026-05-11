@@ -138,6 +138,7 @@ Only delivered events are eligible for cleanup. Events with status `PENDING` or 
 | V1.0.0.21 | Reset role-level `statement_timeout` set by V13 (see PgBouncer compatibility below) |
 | V1.0.0.22 | Add correlation columns (`run_id`, `retail_chain_id`, `store_id`, `pipeline_name`, `entity_type`) and supporting indexes to `records_with_errors` |
 | V1.0.0.23 | Drop the `UNIQUE` qualifier on `idx_ap_mac_address` and `idx_ap_serial_number`; both kept as plain B-Tree indexes for hardware-id lookups |
+| V1.0.0.24 | Partition `sync_state` / `store_sync_state` retention triggers by `sync_status` (keep last 20 rows per status per partition key) |
 
 These migrations follow the same conventions established in Phase 1: table and indexes in separate files, snake_case naming, all objects in the `esl` schema.
 
@@ -191,7 +192,7 @@ Full indexes on `occurred_at` or `delivered_at` would include all rows. Partial 
 
 ### Retention via function, not trigger
 
-Unlike Phase 1's `sync_state` tables which use `AFTER INSERT` triggers for retention, the outbox uses an explicitly called function. This avoids adding cleanup overhead to every pipeline transaction — retention runs on its own schedule, independent of the write path.
+Unlike Phase 1's `sync_state` tables which use `AFTER INSERT` triggers for retention, the outbox uses an explicitly called function. This avoids adding cleanup overhead to every pipeline transaction — retention runs on its own schedule, independent of the write path. The trigger-based bounds for `sync_state` and `store_sync_state` are documented in [Run-history retention](#run-history-retention).
 
 ## Two state tables: `sync_state` vs `store_sync_state`
 
@@ -202,6 +203,7 @@ Two Phase-1 tables track sync state at different grains and both carry a `sync_s
 | Grain | One row per pipeline run | One row per `(pipeline_name, retail_chain_id, store_id)` sync |
 | Status values | `running` → {`success`, `failed`, `cancelled`} (Phase 2) | `success` / `failed` / `cancelled` |
 | Linked by | `id` is the run identity | `run_id` references `sync_state.id` (no FK — see below) |
+| Retention | Last 20 per `(pipeline_name, sync_status)` | Last 20 per `(pipeline_name, retail_chain_id, store_id, sync_status)` |
 
 ## `store_sync_state` semantics
 
@@ -271,3 +273,16 @@ The orchestrator runs three operations against `sync_state` per run:
 3. **Update at end.** The same row is finalized via `UPDATE sync_state SET sync_status = ..., counts ..., duration = ..., finished_at = ..., error_message = ... WHERE id = $1`. The row's `id` is the `run_id` written into `records_with_errors` for any record that failed during the run.
 
 A `running` row is observable while a pipeline executes — useful for live dashboards but worth being aware of when alerting on `sync_status = 'failed'` (a healthy in-flight run is `running`, not yet `success`). Time-windowed alerts should restrict to `finished_at` within the window, not `started_at`.
+
+## Run-history retention
+
+Both run-history tables are bounded by `AFTER INSERT FOR EACH ROW` triggers — `trg_sync_state_retention` and `trg_store_sync_state_retention`. Each trigger keeps the most recent 20 rows per partition, ordered by terminal timestamp (`finished_at` for `sync_state`, `synced_at` for `store_sync_state`):
+
+| Table | Partition key |
+|---|---|
+| `sync_state` | `(pipeline_name, sync_status)` |
+| `store_sync_state` | `(pipeline_name, retail_chain_id, store_id, sync_status)` |
+
+The `sync_status` term was added in V1.0.0.24. Phase 1's partition keys omitted it (one bucket per pipeline, or per store), which was acceptable when the column was effectively binary. Once Phase 2 PR 3 introduced the `running` → {`success`, `failed`, `cancelled`} lifecycle on `sync_state`, a streak of `success` rows in one partition could evict every historical `failed` or `cancelled` row before an operator saw it. Partitioning by status preserves the latest 20 of each, multiplying the steady-state row count by the number of distinct statuses observed for the partition — e.g. a pipeline that has only produced `success` and `failed` rows caps at 40 `sync_state` rows; with all four statuses it caps at 80.
+
+The store-side `idx_store_sync_state_lookup` index (recreated in V1.0.0.15) already covers the new `store_sync_state` retention query exactly — `(pipeline_name, retail_chain_id, store_id, sync_status, synced_at DESC)`. The `sync_state` partition lookup is served by `idx_sync_state_pipeline (pipeline_name, finished_at DESC)`, which does not include `sync_status`; at the table's bounded size (≤ a few thousand rows in steady state) the extra scan is trivial.

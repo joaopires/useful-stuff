@@ -54,7 +54,7 @@ FROM esl.event_outbox;
 
 ### Pipeline run lifecycle (`sync_state`)
 
-The orchestrator inserts a `sync_state` row with `sync_status = 'running'` at the start of each run and updates it to `success` / `failed` at the end (see [03-database.md](03-database.md)). A handful of queries cover the common operational checks:
+The orchestrator inserts a `sync_state` row with `sync_status = 'running'` at the start of each run and updates it to `success` / `failed` at the end (see [03-database.md](03-database.md)). Retention keeps the last 20 rows per `(pipeline_name, sync_status)`, so a long success streak no longer evicts the most recent failures. A handful of queries cover the common operational checks:
 
 ```sql
 -- Live runs right now (one row per pipeline expected; multiple = concurrency issue)

@@ -10,7 +10,7 @@ The rollout has two goals: (1) chart changes can land safely with CDC disabled, 
 
 | Component | Workload | Lifecycle | Phase 1 | Phase 2 |
 |---|---|---|---|---|
-| dbMigrations | Flyway Job (PreSync hook) | One-shot per sync | Existing | New migrations V1.0.0.14–23 (V1.0.0.15 strip composite `store_id` + add `retail_chain_id`; V1.0.0.16–18 `event_outbox` table, indexes, retention function; V1.0.0.19 deletion columns; V1.0.0.20 entity ID length widening; V1.0.0.21 reset role-level `statement_timeout`; V1.0.0.22 `records_with_errors` correlation columns; V1.0.0.23 drop `UNIQUE` qualifier on access-points indexes) |
+| dbMigrations | Flyway Job (PreSync hook) | One-shot per sync | Existing | New migrations V1.0.0.14–24 (V1.0.0.15 strip composite `store_id` + add `retail_chain_id`; V1.0.0.16–18 `event_outbox` table, indexes, retention function; V1.0.0.19 deletion columns; V1.0.0.20 entity ID length widening; V1.0.0.21 reset role-level `statement_timeout`; V1.0.0.22 `records_with_errors` correlation columns; V1.0.0.23 drop `UNIQUE` qualifier on access-points indexes; V1.0.0.24 partition sync-state retention triggers by `sync_status`) |
 | datapipeline | CronJob | Scheduled (daily default) | Existing | Added CDC logic + `cdc.enabled` flag |
 | datafetch | Deployment + Service + Ingress | Always-on | Existing | Unchanged |
 | **event-publisher** | Deployment | Always-on | — | **New** |
