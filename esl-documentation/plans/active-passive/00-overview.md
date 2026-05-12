@@ -1,5 +1,13 @@
 # ESL Orchestrator — Active/Passive Options Overview
 
+> **Update (2026-05-11): chosen path is now `workload-lease.md`.** When this overview was written, the active/passive question was about `datapipeline` only and manual failover was acceptable. Both assumptions have since changed:
+>
+> 1. The client requires **automatic, unattended failover** for *all* stateful workloads — `datapipeline` and `event-publisher`. The 2026-04-29 descope of `event-publisher` from active/passive is reversed.
+> 2. Ops want to deprecate the ArgoCD `helm.parameters` mechanism that Option 1 relies on.
+> 3. The mechanism must work uniformly for N clusters per environment (N=1 in dev, N=2 in PP/PRD), without an environment-specific code path.
+>
+> Option 1 (`config-driven.md`) is therefore superseded. The lease primitive from Option 2 is generalised to both `datapipeline` and `event-publisher` in **`workload-lease.md`**, without the Deployment-shape refactor Option 3 envisioned. The historical analysis below is preserved for context.
+
 ## Problem
 
 The production ESL Orchestrator is deployed to two OpenShift clusters (`oshift-prd-mts1` and `oshift-prd-rba1`) in an active/active pattern. Both clusters run an identical workload because they share the same Helm chart and values file. One workload has a concrete cost when duplicated:

@@ -1,6 +1,8 @@
 # Active/Passive Orchestration — Deployment + Internal Scheduler + DB Lease (Option 3, DRAFT)
 
-**Status:** DRAFT. Not committed. Execute only when the trigger conditions below are met. The client chose **Option 1** (config-driven `suspend`) for now — see `plans/active-passive/config-driven.md`. Option 3 is planned as a future release once operational experience with Option 1 justifies the additional complexity.
+**Status (2026-05-11): OVERTAKEN, retained for reference.** Automatic failover was solved by `plans/active-passive/workload-lease.md`, which keeps the existing CronJob + Deployment shapes and pushes the lease check into the workloads themselves. The Deployment + internal scheduler refactor described here would only be revisited if the workload-lease mechanism proves insufficient (e.g., mid-CronJob-run failover becomes a hard requirement, which it currently is not). Original draft framing preserved below for context.
+
+**Original status:** DRAFT. Not committed. Execute only when the trigger conditions below are met. The client chose **Option 1** (config-driven `suspend`) for now — see `plans/active-passive/config-driven.md`. Option 3 is planned as a future release once operational experience with Option 1 justifies the additional complexity.
 
 **Origin:** Drafted 2026-04-17 alongside the Option 1 plan, so a future engineer (or Claude session) can resume cold.
 

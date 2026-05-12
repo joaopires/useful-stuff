@@ -1,6 +1,6 @@
 # Option 2 — CronJob with database-backed lease
 
-> **Outcome (2026-04-29):** Option 2 was **not** chosen. Option 1 (config-driven suspend) was selected for `datapipeline`. `event-publisher` is out of scope for active/passive — it stays active/active via `SELECT … FOR UPDATE SKIP LOCKED` on `event_outbox`. Pros/cons below that frame the lease primitive as "reusable for event-publisher" are obsolete: that reuse is no longer planned.
+> **Outcome (2026-05-11): the lease primitive in this report is now the chosen path, generalised in `workload-lease.md`.** Earlier framing (2026-04-29): Option 2 was not chosen and `event-publisher` was descoped. That framing is reversed — the client now requires automatic failover for `datapipeline` *and* `event-publisher`, and ops want the `helm.parameters` mechanism deprecated. The lease primitive described here is therefore revived and extended to both workloads; the "reusable for event-publisher" framing is back in effect. This report remains an accurate description of the core design; `workload-lease.md` is the committed implementation plan.
 
 **One-liner:** both clusters deploy the CronJob and both fire at the same time. A single Postgres row arbitrates who runs: the winner executes the sync, the loser exits cleanly. Automatic takeover for whole-cluster failures.
 

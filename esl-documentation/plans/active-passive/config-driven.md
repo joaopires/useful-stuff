@@ -1,5 +1,7 @@
 # Active/Passive Orchestration — Config-Driven Suspend (Option 1)
 
+> **Status (2026-05-11): SUPERSEDED.** This plan is replaced by `workload-lease.md`, which delivers automatic failover via a Postgres-arbitrated lease driven from inside the workloads themselves. The mechanism described here (manual `activeCluster` edit in the values file, with ArgoCD `helm.parameters` plumbing) is being deprecated. The current PP rollout (Steps 1–5 complete) remains in place as a fallback during the workload-lease migration (see `workload-lease.md` Milestone 6, which deliberately runs both mechanisms in parallel before the Helm cleanup in Milestone 7). The Step 6 production rollout listed below is no longer planned — production will adopt the workload-lease mechanism directly.
+
 ## Context
 
 The ESL Orchestrator is deployed to two production OpenShift clusters (`oshift-prd-mts1` primary and `oshift-prd-rba1` redundant) in an active/active pattern. Both clusters run the same workloads:
