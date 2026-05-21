@@ -36,6 +36,8 @@ The flag also gates the VLink connector's `deleted=true` query param: when CDC i
 
 The flag is evaluated once at startup in the sink builder — the `CDC` struct is only instantiated when enabled. At runtime, the dispatch check is a nil pointer comparison (`s.cdc != nil`), not a config lookup.
 
+> **Operational note.** The CDC classifier assumes the entity tables already reflect VLink's current state from at least one prior sync. Bringing a new store into `filterStores` while CDC is enabled bypasses this assumption and triggers a CREATED/DELETED spike for the new store's catalog. See [Onboarding a new store after CDC is enabled](07-operations.md#onboarding-a-new-store-after-cdc-is-enabled) in the operations runbook.
+
 ## Architecture
 
 All CDC logic lives in a single file (`internal/sink/postgres/cdc.go`) as an encapsulated struct with two public methods. The sink orchestrates the transaction and delegates each phase:

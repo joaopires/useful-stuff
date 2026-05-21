@@ -145,6 +145,7 @@ ArgoCD sync phases (PreSync Flyway Job → workload apply) and the per-env promo
 Phase 2 does not introduce new top-level Helm values beyond:
 
 - `dataPipeline.config.cdc.enabled` — bool, default `false`. Controls whether the datapipeline sink writes to `event_outbox`.
+- `dataPipeline.config.filterStores` — list of strings, optional. Restricts the datapipeline to syncing only the listed stores (format: `{retail_chain}.{store_id}`). To add a store to this list while CDC is enabled in production, follow [Onboarding a new store after CDC is enabled](07-operations.md#onboarding-a-new-store-after-cdc-is-enabled) — appending directly to this list while CDC is active causes a CREATED/DELETED spike for the new store's catalog.
 - `dataPipeline.suspend` — bool, default unset. When `true`, forces the datapipeline CronJob into a suspended state on top of the active/passive cluster check (`clusterName != activeCluster`). Useful for ad-hoc maintenance pauses on the active cluster without changing `activeCluster`. The override is one-way: setting it to `false` cannot un-suspend a passive cluster — the cluster check still wins.
 - `eventPublisher.*` — full event-publisher component configuration. See [05-event-publisher.md](05-event-publisher.md) for the complete schema.
 

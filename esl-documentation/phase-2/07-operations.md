@@ -248,6 +248,24 @@ UPDATE esl.store_sync_state
 
 After the recovery run, verify: the store should show `success` with a `*_processed` count consistent with the destination table, and `records_with_errors` should reflect any rows that genuinely failed permanent validation.
 
+### Onboarding a new store after CDC is enabled
+
+Adding a store to `dataPipeline.config.filterStores` once CDC is already active requires a short isolation procedure. The naive approaches both have visible side effects.
+
+**Why a procedure is needed.** With CDC active, the first datapipeline run after a new store appears in `filterStores` has no prior `store_sync_state` row for that store. The CDC classifier treats every active record as CREATED and every historically-deleted record as DELETED — a spike on the order of thousands of events per store, far above the steady-state change rate. The same effect at environment level is described in the Monitoring section's note on initial CREATED/DELETED spikes.
+
+**Why "disable CDC, then sync with the full list" is also wrong.** It avoids the per-event spike, but `store_sync_state.synced_at` advances for every store in `filterStores`. Any real changes that occur on the existing stores during that CDC-disabled window are silently consumed: no outbox events are written for them, and subsequent CDC-enabled runs use the advanced timestamp as the diff baseline.
+
+**Procedure.**
+
+1. Disable CDC: set `dataPipeline.config.cdc.enabled: false` in the env's values file and push. Wait for ArgoCD to sync.
+2. **Replace** (do not append to) `dataPipeline.config.filterStores` with a list containing **only** the new store. Push and wait for ArgoCD to sync.
+3. Wait for at least one full datapipeline run to complete — confirm via `store_sync_state` showing `sync_status: success` for the new store.
+4. Restore `dataPipeline.config.filterStores` to the previous list, with the new store appended. Push.
+5. Re-enable CDC: set `dataPipeline.config.cdc.enabled: true`. Push.
+
+**Note.** A permanent fix that avoids this isolation procedure (per-store CDC state tracking) is in change-request approval and is not yet in production. Until it lands, treat the active `filterStores` list as stable; add new stores only via this procedure, ideally during a maintenance window.
+
 ### Stale `running` row at startup (orphan sweep fired)
 
 On startup, the orchestrator looks for `sync_state` rows belonging to its `pipeline_name` that are still in `running` and flips them to `failed` with `error_message = 'orphaned by orchestrator restart'`. A log line surfaces only when the sweep actually updates rows:
