@@ -101,6 +101,17 @@ Spot-check Solace topic subscription via the Solace Cloud portal or a test consu
 3. event-publisher drains any remaining PENDING rows, then idles
 4. No database rollback needed — V1.0.0.15 is data-only and the `event_outbox` table is always safe to leave in place
 
+### Emergency stop (do not drain PENDING rows)
+
+Use when the events themselves are wrong (incorrect payload, sensitive data leak, downstream consumer breakage) and PENDING rows must NOT reach Solace. For routine cutover rollback, [Pause event publishing](#pause-event-publishing-keep-outbox-intact) is the right choice — this is the fast-stop path.
+
+1. Set `eventPublisher.replicaCount: 0` in the env's values file and push. ArgoCD syncs and publisher pods terminate; no further publishes occur.
+2. Set `dataPipeline.config.cdc.enabled: false` in the same or a follow-up commit so the next datapipeline run produces no new outbox rows.
+3. Investigate. PENDING rows remain untouched in the outbox; the publisher is fully stopped.
+4. To resume: discard any PENDING rows that must not be sent (see `### Drain the outbox urgently (emergency only)` in `07-operations.md`), then restore `replicaCount` and `cdc.enabled` to their normal values.
+
+> If seconds matter, `kubectl -n <namespace> scale deployment/orchestrator-esl-eventpublisher --replicas=0` stops publishes immediately — but ArgoCD with auto-sync will revert it once the next reconcile cycle runs, so push the values-file change in parallel for the change to persist.
+
 ### Fully remove event-publisher
 
 1. Remove (or comment out) the eventPublisher section in per-env values
