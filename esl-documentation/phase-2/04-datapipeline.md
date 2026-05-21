@@ -406,7 +406,8 @@ All metrics include the `sink.type=postgres` attribute and are prefixed with `es
   "batch_size": 100,
   "cdc_created": 3,
   "cdc_updated": 7,
-  "cdc_unchanged": 90,
+  "cdc_deleted": 2,
+  "cdc_unchanged": 88,
   "cdc_fetch_ms": 12
 }
 ```

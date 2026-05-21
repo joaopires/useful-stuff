@@ -22,13 +22,13 @@ Before deploying Phase 2, the following must be in place:
 ### 1. Vault entries
 
 - `{vaultBasePath}/database` — existing (Phase 1), no changes
-- **New:** `{vaultBasePath}/solace` with two properties (OAuth2 client credentials):
+- **New:** `{vaultBasePath}/solace/oauth` with two properties (OAuth2 client credentials):
   - `client-id` — OAuth2 client ID issued by the IdP
   - `client-secret` — OAuth2 client secret
 
 The remaining Solace config (`host`, `vpn`, `token_endpoint`, `scope`, `topic_prefix`) is non-sensitive and lives in the per-env values file (`eventPublisher.config.solace.*`). `auth_scheme` is hardcoded to `oauth2` in the ConfigMap — basic auth is only used in local docker-compose and is not wired into the chart.
 
-The event-publisher's ExternalSecret references both `{vaultBasePath}/database` (reuses the same credentials as datapipeline) and `{vaultBasePath}/solace`. Missing entries cause the ExternalSecret reconcile to fail and block pod startup.
+The event-publisher's ExternalSecret references both `{vaultBasePath}/database` (reuses the same credentials as datapipeline) and `{vaultBasePath}/solace/oauth`. Missing entries cause the ExternalSecret reconcile to fail and block pod startup.
 
 ### 2. Solace Cloud gateway in cluster
 
