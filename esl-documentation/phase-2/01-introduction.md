@@ -10,6 +10,24 @@ lang: "en"
 #show link: set text(fill: blue)
 ```
 
+```{=typst}
+#block(
+  width: 100%,
+  fill: rgb("#fdf3e7"),
+  stroke: (left: 3pt + rgb("#d35400")),
+  inset: (x: 14pt, y: 12pt),
+  radius: 2pt,
+)[
+  #text(font: "Ubuntu", weight: "bold", size: 12pt, fill: rgb("#b34700"))[Critical operations notice — failover is manual]
+
+  The ESL Orchestrator's publishing components — the datapipeline CronJob and the event-publisher Deployment — run in an *active/passive* configuration across two OpenShift clusters per environment. Only the active cluster publishes; the passive cluster is suspended.
+
+  *Failover is not automatic.* If the active cluster becomes unhealthy, an operator must fail over manually by flipping the `activeCluster` value in the environment's values file and letting ArgoCD sync. Until that is done, no datapipeline runs and no events are published.
+
+  Full procedure, verification, and rollback are in #link(<activepassive-failover>)[Section 7.7 — Active/Passive Failover].
+]
+```
+
 # Introduction
 
 ## Purpose
